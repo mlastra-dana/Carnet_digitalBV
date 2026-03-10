@@ -4,8 +4,8 @@
   "serialNumber": "00000001",
   "teamIdentifier": "25P2L4T5AN",
   "organizationName": "DanaConnect Demo",
-  "description": "Demo Generación PKPass - Evento Carnaval",
-  "logoText": "DanaConnect Demo",
+  "description": "Carnet Digital de Asegurado",
+  "logoText": "Carnet Asegurado",
   "eventTicket": {
     "headerFields": [
       {
@@ -16,33 +16,28 @@
     ],
     "primaryFields": [
       {
-        "key": "evento",
-        "label": "Evento",
-        "value": "Fiesta Carnaval"
+        "key": "asegurado",
+        "label": "Asegurado",
+        "value": "Juan Pérez"
       }
     ],
     "secondaryFields": [
       {
         "key": "fecha",
-        "label": "Fecha",
-        "value": "15 Ago 2025"
+        "label": "Documento",
+        "value": "V-00000000"
       },
       {
-        "key": "hora",
-        "label": "Hora",
-        "value": "10:00"
+        "key": "email",
+        "label": "Email",
+        "value": "persona@correo.com"
       }
     ],
     "auxiliaryFields": [
       {
-        "key": "modalidad",
-        "label": "Modalidad",
-        "value": "Presencial"
-      },
-      {
-        "key": "asegurado",
-        "label": "Asegurado",
-        "value": "Juan Pérez"
+        "key": "poliza",
+        "label": "Póliza",
+        "value": "POL-000001"
       }
     ]
   },

@@ -1,3 +1,5 @@
+@import url("https://fonts.googleapis.com/css2?family=Montserrat:wght@400;600;700;800&display=swap");
+
 @tailwind base;
 @tailwind components;
 @tailwind utilities;
@@ -9,6 +11,8 @@ body,
 }
 
 body {
-  @apply bg-slate-950 text-slate-50 antialiased;
+  @apply antialiased;
+  font-family: "Montserrat", sans-serif;
+  background: #f3f3f3;
+  color: #394c6c;
 }
-

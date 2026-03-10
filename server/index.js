@@ -146,7 +146,7 @@ async function createSignedPkpass({
     }
   }
 }
-async function sendContactToDana({ name, email, imageRef, passType }) {
+async function sendContactToDana({ name, email, imageRef }) {
   try {
     const endpoint =
       process.env.DANA_CONTACTS_URL ||
@@ -157,20 +157,11 @@ async function sendContactToDana({ name, email, imageRef, passType }) {
 
     const safe = (value) => (value || "").toString().replace(/"/g, '""');
 
-    const typeLabelMap = {
-      eventTicket: "Event Ticket",
-      boardingPass: "Boarding Pass",
-      storeCard: "Store Card",
-      coupon: "Coupon",
-      generic: "Generic",
-      transit: "Transit"
-    };
-
-    const typeLabel = typeLabelMap[passType] || passType || "Unknown";
+    const passLabel = "Carnet Asegurado";
 
     const csvLine = `"${safe(name)}","${safe(email)}","${safe(
       imageRef
-    )}","${safe(typeLabel)}"\n`;
+    )}","${safe(passLabel)}"\n`;
 
     const formData = new FormData();
     formData.append("delimiter", '"');
@@ -231,13 +222,12 @@ app.post("/dana-contact", async (req, res) => {
     const name = (req.body?.name || "").toString();
     const email = (req.body?.email || "").toString();
     const photoDataUrl = (req.body?.photoDataUrl || "").toString();
-    const passType = (req.body?.passType || "eventTicket").toString();
 
     const imageRef =
       photoDataUrl ||
       "https://media.istockphoto.com/id/1389348844/es/foto/foto-de-estudio-de-una-hermosa-joven-sonriendo-mientras-est%C3%A1-de-pie-sobre-un-fondo-gris.jpg?s=612x612&w=0&k=20&c=kUufmNoTnDcRbyeHhU1wRiip-fNjTWP9owjHf75frFQ=";
 
-    await sendContactToDana({ name, email, imageRef, passType });
+    await sendContactToDana({ name, email, imageRef });
     res.json({ ok: true });
   } catch (error) {
     console.error("Error en /dana-contact", error);
@@ -261,11 +251,18 @@ app.get("/pkpass", async (req, res) => {
 
     if (pass.eventTicket && Array.isArray(pass.eventTicket.primaryFields)) {
       pass.eventTicket.primaryFields = [...pass.eventTicket.primaryFields];
-      if (pass.eventTicket.primaryFields[0]) {
-        pass.eventTicket.primaryFields[0] = {
-          ...pass.eventTicket.primaryFields[0],
-          value: name
-        };
+      const aseguradoFieldIndex = pass.eventTicket.primaryFields.findIndex(
+        (f) => f.key === "asegurado"
+      );
+      const aseguradoField = {
+        key: "asegurado",
+        label: "Asegurado",
+        value: name
+      };
+      if (aseguradoFieldIndex >= 0) {
+        pass.eventTicket.primaryFields[aseguradoFieldIndex] = aseguradoField;
+      } else {
+        pass.eventTicket.primaryFields.push(aseguradoField);
       }
     }
 
@@ -352,53 +349,23 @@ app.post("/pkpass", async (req, res) => {
     const name = (req.body?.name || "Juan Pérez").toString();
     const email = (req.body?.email || "").toString();
     const photoDataUrl = (req.body?.photoDataUrl || "").toString();
-    const passType = (req.body?.passType || "eventTicket").toString();
 
     const passTemplateRaw = await fs.readFile(templatePassPath, "utf8");
     const passTemplate = JSON.parse(passTemplateRaw);
 
     const pass = { ...passTemplate };
 
-    // Determinar la "clase" de pase según lo elegido en la UI.
-    const typeMap = {
-      eventTicket: "eventTicket",
-      boardingPass: "boardingPass",
-      storeCard: "storeCard",
-      coupon: "coupon",
-      generic: "generic",
-      transit: "boardingPass"
-    };
-
-    const styleKey = typeMap[passType] || "eventTicket";
-
-    // Usamos eventTicket del template como base para todos los estilos.
-    const baseLayout =
-      passTemplate.eventTicket ||
-      passTemplate.generic || {
+    // Mantener un único estilo de pase: carnet de asegurado.
+    if (!pass.eventTicket) {
+      pass.eventTicket = {
         headerFields: [],
         primaryFields: [],
         secondaryFields: [],
         auxiliaryFields: []
       };
-
-    // Clonar el layout base para el estilo seleccionado.
-    pass[styleKey] = JSON.parse(JSON.stringify(baseLayout));
-
-    // Eliminar otros estilos para que solo exista uno.
-    ["eventTicket", "boardingPass", "storeCard", "coupon", "generic"].forEach(
-      (key) => {
-        if (key !== styleKey && pass[key]) {
-          delete pass[key];
-        }
-      }
-    );
-
-    const layout = pass[styleKey];
-
-    // Para boardingPass/transit, se requiere transitType.
-    if (styleKey === "boardingPass") {
-      layout.transitType = layout.transitType || "PKTransitTypeBus";
     }
+
+    const layout = pass.eventTicket;
 
     // Sesión dinámica (número aleatorio) en headerFields
     if (Array.isArray(layout.headerFields)) {
@@ -412,10 +379,10 @@ app.post("/pkpass", async (req, res) => {
       }
     }
 
-    // Campo asegurado dinámico en auxiliaryFields
-    if (Array.isArray(layout.auxiliaryFields)) {
-      layout.auxiliaryFields = [...layout.auxiliaryFields];
-      const aseguradoIndex = layout.auxiliaryFields.findIndex(
+    // Campo asegurado dinámico en primaryFields
+    if (Array.isArray(layout.primaryFields)) {
+      layout.primaryFields = [...layout.primaryFields];
+      const aseguradoIndex = layout.primaryFields.findIndex(
         (f) => f.key === "asegurado"
       );
       const aseguradoField = {
@@ -424,15 +391,15 @@ app.post("/pkpass", async (req, res) => {
         value: name
       };
       if (aseguradoIndex >= 0) {
-        layout.auxiliaryFields[aseguradoIndex] = aseguradoField;
+        layout.primaryFields[aseguradoIndex] = aseguradoField;
       } else {
-        layout.auxiliaryFields.push(aseguradoField);
+        layout.primaryFields.push(aseguradoField);
       }
     }
 
-    if (pass.eventTicket && Array.isArray(pass.eventTicket.secondaryFields)) {
-      pass.eventTicket.secondaryFields = [...pass.eventTicket.secondaryFields];
-      const emailFieldIndex = pass.eventTicket.secondaryFields.findIndex(
+    if (Array.isArray(layout.secondaryFields)) {
+      layout.secondaryFields = [...layout.secondaryFields];
+      const emailFieldIndex = layout.secondaryFields.findIndex(
         (f) => f.key === "email"
       );
       const emailField = {
@@ -441,9 +408,9 @@ app.post("/pkpass", async (req, res) => {
         value: email || "no-email"
       };
       if (emailFieldIndex >= 0) {
-        pass.eventTicket.secondaryFields[emailFieldIndex] = emailField;
+        layout.secondaryFields[emailFieldIndex] = emailField;
       } else {
-        pass.eventTicket.secondaryFields.push(emailField);
+        layout.secondaryFields.push(emailField);
       }
     }
 

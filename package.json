@@ -14,8 +14,10 @@
     "archiver": "^7.0.1",
     "cors": "^2.8.5",
     "express": "^4.21.2",
+    "pdfjs-dist": "^5.5.207",
     "react": "^18.3.1",
-    "react-dom": "^18.3.1"
+    "react-dom": "^18.3.1",
+    "tesseract.js": "^7.0.0"
   },
   "devDependencies": {
     "@types/node": "^22.10.2",
