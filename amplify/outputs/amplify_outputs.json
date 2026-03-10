@@ -1,0 +1,6 @@
+{
+  "apiUrl": "http://localhost:3001",
+  "lambdaName": "helloWorld-local-mock",
+  "amplifyConfig": {}
+}
+

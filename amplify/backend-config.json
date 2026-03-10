@@ -1,0 +1,16 @@
+{
+  "version": 1,
+  "resources": {
+    "api": {
+      "myApi": {
+        "path": "backend/api/myApi"
+      }
+    },
+    "function": {
+      "helloWorld": {
+        "path": "backend/functions/helloWorld"
+      }
+    }
+  }
+}
+

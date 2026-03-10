@@ -1,0 +1,59 @@
+{
+  "formatVersion": 1,
+  "passTypeIdentifier": "pass.com.danaconnect.membership-card",
+  "serialNumber": "00000001",
+  "teamIdentifier": "25P2L4T5AN",
+  "organizationName": "DanaConnect Demo",
+  "description": "Demo Generación PKPass - Evento Carnaval",
+  "logoText": "DanaConnect Demo",
+  "eventTicket": {
+    "headerFields": [
+      {
+        "key": "sesion",
+        "label": "Sesión",
+        "value": "12345"
+      }
+    ],
+    "primaryFields": [
+      {
+        "key": "evento",
+        "label": "Evento",
+        "value": "Fiesta Carnaval"
+      }
+    ],
+    "secondaryFields": [
+      {
+        "key": "fecha",
+        "label": "Fecha",
+        "value": "15 Ago 2025"
+      },
+      {
+        "key": "hora",
+        "label": "Hora",
+        "value": "10:00"
+      }
+    ],
+    "auxiliaryFields": [
+      {
+        "key": "modalidad",
+        "label": "Modalidad",
+        "value": "Presencial"
+      },
+      {
+        "key": "asegurado",
+        "label": "Asegurado",
+        "value": "Juan Pérez"
+      }
+    ]
+  },
+  "barcodes": [
+    {
+      "format": "PKBarcodeFormatQR",
+      "message": "https://example.com/carnet/00000001",
+      "messageEncoding": "iso-8859-1"
+    }
+  ],
+  "backgroundColor": "rgb(0, 75, 143)",
+  "foregroundColor": "rgb(255, 255, 255)",
+  "labelColor": "rgb(245, 159, 36)"
+}

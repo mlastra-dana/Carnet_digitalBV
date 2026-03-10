@@ -1,0 +1,8 @@
+{
+  "features": {
+    "graphqltransformer": {
+      "addawsregion": true
+    }
+  }
+}
+
