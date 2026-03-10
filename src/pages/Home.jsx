@@ -377,8 +377,8 @@ function Home() {
         file.type === "application/pdf" ||
         file.name.toLowerCase().endsWith(".pdf");
 
-      let ocrInput = file;
       let previewDataUrl = "";
+      let baseCanvas = null;
 
       if (isPdf) {
         const pdfjs = await import("pdfjs-dist/legacy/build/pdf.mjs");
@@ -405,7 +405,7 @@ function Home() {
           viewport
         }).promise;
 
-        ocrInput = pdfCanvas;
+        baseCanvas = pdfCanvas;
         previewDataUrl = pdfCanvas.toDataURL("image/png");
       } else {
         previewDataUrl = await new Promise((resolve, reject) => {
@@ -422,45 +422,125 @@ function Home() {
           };
           fileReader.readAsDataURL(file);
         });
+
+        const img = await new Promise((resolve, reject) => {
+          const image = new Image();
+          image.onload = () => resolve(image);
+          image.onerror = reject;
+          image.src = previewDataUrl;
+        });
+        const imgCanvas = document.createElement("canvas");
+        imgCanvas.width = img.naturalWidth || img.width;
+        imgCanvas.height = img.naturalHeight || img.height;
+        const imgCtx = imgCanvas.getContext("2d");
+        if (!imgCtx) {
+          throw new Error("No se pudo crear canvas para OCR de imagen.");
+        }
+        imgCtx.drawImage(img, 0, 0, imgCanvas.width, imgCanvas.height);
+        baseCanvas = imgCanvas;
       }
 
       if (previewDataUrl) {
         setIdImageDataUrl(previewDataUrl);
       }
 
-      const { recognize } = await import("tesseract.js");
-      const result = await recognize(ocrInput, "spa+eng", {
-        logger: (message) => {
-          if (
-            message &&
-            typeof message.progress === "number" &&
-            message.status !== "done"
-          ) {
-            setOcrProgress(Math.round(message.progress * 100));
-          }
+      const rotateCanvas = (canvas, angle) => {
+        const normalized = ((angle % 360) + 360) % 360;
+        if (normalized === 0) return canvas;
+        const rotated = document.createElement("canvas");
+        if (normalized === 90 || normalized === 270) {
+          rotated.width = canvas.height;
+          rotated.height = canvas.width;
+        } else {
+          rotated.width = canvas.width;
+          rotated.height = canvas.height;
         }
-      });
+        const ctx = rotated.getContext("2d");
+        if (!ctx) return canvas;
+        ctx.translate(rotated.width / 2, rotated.height / 2);
+        ctx.rotate((normalized * Math.PI) / 180);
+        ctx.drawImage(canvas, -canvas.width / 2, -canvas.height / 2);
+        return rotated;
+      };
 
-      const words = result?.data?.words || [];
-      const fullText = result?.data?.text || "";
-      const regions = findFieldRegions(words);
-      const values = extractFieldValuesFromWords(words, fullText);
-      const highlightedDataUrl = await drawOcrRegionsOnImage(previewDataUrl, regions);
+      const scoreResult = (values, confidence = 0) => {
+        let score = 0;
+        if (values.identificacion) score += 2.5;
+        if (values.fullName) score += 1.5;
+        if ((values.fullName || "").split(" ").filter(Boolean).length >= 3) score += 2.5;
+        if (values.hasNombres) score += 1;
+        if (values.hasApellidos) score += 1;
+        score += Math.max(0, Math.min(2, confidence / 50));
+        if (/DIRECTOR|GUSTAVO\s+VIZCAINO/i.test(values.fullName || "")) score -= 2;
+        return score;
+      };
 
-      if (highlightedDataUrl) {
-        setIdImageDataUrl(highlightedDataUrl);
+      const { recognize } = await import("tesseract.js");
+      const angles = isPdf ? [0] : [0, 90, 180, 270];
+      let best = null;
+
+      for (let i = 0; i < angles.length; i += 1) {
+        const angle = angles[i];
+        const rotatedInput = rotateCanvas(baseCanvas, angle);
+        const result = await recognize(rotatedInput, "spa+eng", {
+          logger: (message) => {
+            if (
+              message &&
+              typeof message.progress === "number" &&
+              message.status !== "done"
+            ) {
+              const stage = ((i + message.progress) / angles.length) * 92;
+              setOcrProgress(Math.round(stage));
+            }
+          }
+        });
+
+        const words = result?.data?.words || [];
+        const fullText = result?.data?.text || "";
+        const values = extractFieldValuesFromWords(words, fullText);
+        const confidence = result?.data?.confidence || 0;
+        const score = scoreResult(values, confidence);
+
+        if (!best || score > best.score) {
+          best = {
+            score,
+            words,
+            values,
+            canvas: rotatedInput
+          };
+        }
       }
-      if (values.identificacion) {
-        setIdentificationNumber(values.identificacion);
+
+      const bestWords = best?.words || [];
+      const bestValues = best?.values || {
+        identificacion: "",
+        fullName: "",
+        hasNombres: false,
+        hasApellidos: false
+      };
+
+      const bestPreviewDataUrl =
+        best?.canvas?.toDataURL("image/png") || previewDataUrl;
+      const regions = findFieldRegions(bestWords);
+      const highlightedDataUrl = await drawOcrRegionsOnImage(
+        bestPreviewDataUrl,
+        regions
+      );
+
+      setOcrProgress(96);
+      setIdImageDataUrl(highlightedDataUrl || bestPreviewDataUrl);
+
+      if (bestValues.identificacion) {
+        setIdentificationNumber(bestValues.identificacion);
       }
-      if (values.fullName) {
-        setFullName(values.fullName);
+      if (bestValues.fullName) {
+        setFullName(bestValues.fullName);
       }
 
       setOcrDetectedFields({
-        identificacion: Boolean(regions.identificacion || values.identificacion),
-        nombres: Boolean(regions.nombres || values.hasNombres),
-        apellidos: Boolean(regions.apellidos || values.hasApellidos)
+        identificacion: Boolean(regions.identificacion || bestValues.identificacion),
+        nombres: Boolean(regions.nombres || bestValues.hasNombres),
+        apellidos: Boolean(regions.apellidos || bestValues.hasApellidos)
       });
     } catch (error) {
       console.error("Error al ejecutar OCR", error);
@@ -573,7 +653,7 @@ function Home() {
                     </span>
                   </div>
                   <p className="mt-2 text-xs text-[#5f6f8f]">
-                    Guía: adjunta la cédula en PDF o imagen (JPG/PNG), procurando que el texto se vea claro y completo.
+                    Adjunta tu cédula de identidad legible (formatos soportados: PDF, JPG, PNG).
                   </p>
                   {idImageDataUrl && (
                     <div className="relative mt-3 rounded-lg border border-[#d7e3fd] overflow-hidden bg-white">
@@ -594,9 +674,46 @@ function Home() {
                     </div>
                   )}
                   {isOcrRunning && (
-                    <p className="mt-2 text-xs text-[#5f6f8f]">
-                      Procesando OCR... {ocrProgress}%
-                    </p>
+                    <div className="mt-3 rounded-[12px] border border-[#d7e3fd] bg-gradient-to-r from-white to-[#f6f9ff] p-3">
+                      <div className="flex items-center gap-3">
+                        <div className="relative h-8 w-8 shrink-0">
+                          <div className="absolute inset-0 rounded-full border-2 border-[#3864d9]/25" />
+                          <div className="absolute inset-0 rounded-full border-2 border-transparent border-t-[#3864d9] animate-spin" />
+                          <svg
+                            viewBox="0 0 24 24"
+                            className="absolute inset-0 m-auto h-4 w-4 text-[#3864d9]"
+                            fill="none"
+                            stroke="currentColor"
+                            strokeWidth="2"
+                            strokeLinecap="round"
+                            strokeLinejoin="round"
+                            aria-hidden="true"
+                          >
+                            <path d="M6 2h12" />
+                            <path d="M6 22h12" />
+                            <path d="M8 2c0 6 8 6 8 10s-8 4-8 10" />
+                            <path d="M16 2c0 6-8 6-8 10s8 4 8 10" />
+                          </svg>
+                        </div>
+                        <div className="min-w-0">
+                          <p className="text-sm font-semibold text-[#22355d]">
+                            Analizando tu documento
+                          </p>
+                          <p className="text-xs text-[#5f6f8f]">
+                            Esto puede tardar unos segundos
+                          </p>
+                        </div>
+                        <div className="ml-auto text-sm font-bold text-[#3864d9]">
+                          {ocrProgress}%
+                        </div>
+                      </div>
+                      <div className="mt-3 h-1.5 w-full rounded-full bg-[#dfe8ff] overflow-hidden">
+                        <div
+                          className="h-full rounded-full bg-gradient-to-r from-[#3864d9] to-[#5d7ee3] transition-all duration-300"
+                          style={{ width: `${Math.min(100, Math.max(0, ocrProgress))}%` }}
+                        />
+                      </div>
+                    </div>
                   )}
                   {ocrError && (
                     <p className="mt-2 text-xs text-red-600">{ocrError}</p>
