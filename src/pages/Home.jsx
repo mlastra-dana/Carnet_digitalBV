@@ -428,6 +428,10 @@ function Home({ amplifyOutputs }) {
   const displayEmail = email || "juan.perez@ejemplo.com";
   const displayId = identificationNumber || "V12345678";
   const displayPolicy = `POL-${displayId.replace(/[^0-9]/g, "").slice(-6) || "000001"}`;
+  const demoQrData = `LBC-DEMO|${displayId}|${displayPolicy}|${displayEmail}`;
+  const demoQrUrl = `https://api.qrserver.com/v1/create-qr-code/?size=220x220&margin=0&data=${encodeURIComponent(
+    demoQrData
+  )}`;
 
   const handleDownloadPkpass = async () => {
     try {
@@ -525,6 +529,16 @@ function Home({ amplifyOutputs }) {
                 <div className="mt-4 rounded-[12px] border border-[#d3def9] bg-[#f5f8ff] px-3 py-2">
                   <p className="text-[10px] uppercase tracking-[0.18em] text-[#5f6f8f]">Documento</p>
                   <p className="text-xs font-semibold text-[#2d468f]">Carnet digital de asegurado</p>
+                </div>
+
+                <div className="mt-4 rounded-[12px] border border-[#d3def9] bg-white px-3 py-3">
+                  <div className="flex items-center justify-center">
+                    <img
+                      src={demoQrUrl}
+                      alt="Código QR del carnet"
+                      className="h-24 w-24 rounded-[8px] border border-[#d3def9] bg-white"
+                    />
+                  </div>
                 </div>
               </div>
 

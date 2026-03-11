@@ -18,6 +18,12 @@ app.use(
   })
 );
 
+function buildQrDemoMessage(name, email) {
+  const safeName = (name || "ASEGURADO").toString().trim();
+  const safeEmail = (email || "sin-email").toString().trim();
+  return `LBC-DEMO|${safeName}|${safeEmail}|CARNET-DIGITAL`;
+}
+
 async function createSignedPkpass({
   res,
   pass,
@@ -214,9 +220,7 @@ app.get("/pkpass", async (req, res) => {
     if (Array.isArray(pass.barcodes) && pass.barcodes[0]) {
       pass.barcodes[0] = {
         ...pass.barcodes[0],
-        message: `https://example.com/carnet?name=${encodeURIComponent(
-          name
-        )}&email=${encodeURIComponent(email)}`
+        message: buildQrDemoMessage(name, email)
       };
     }
 
@@ -345,9 +349,7 @@ app.post("/pkpass", async (req, res) => {
     if (Array.isArray(pass.barcodes) && pass.barcodes[0]) {
       pass.barcodes[0] = {
         ...pass.barcodes[0],
-        message: `https://example.com/carnet?name=${encodeURIComponent(
-          name
-        )}&email=${encodeURIComponent(email)}`
+        message: buildQrDemoMessage(name, email)
       };
     }
 
