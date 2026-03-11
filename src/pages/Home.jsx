@@ -14,13 +14,21 @@ function Home({ amplifyOutputs }) {
   const [idReadSuccess, setIdReadSuccess] = useState("");
   const [idReadDebug, setIdReadDebug] = useState("");
   const [idFileName, setIdFileName] = useState("");
+  const [idDocumentImageDataUrl, setIdDocumentImageDataUrl] = useState("");
   const [ocrStatus, setOcrStatus] = useState("");
+  const [isBiometricRunning, setIsBiometricRunning] = useState(false);
+  const [biometricStatus, setBiometricStatus] = useState("");
+  const [biometricError, setBiometricError] = useState("");
+  const [biometricResult, setBiometricResult] = useState("");
+  const [biometricScore, setBiometricScore] = useState(null);
 
   const videoRef = useRef(null);
   const canvasRef = useRef(null);
   const streamRef = useRef(null);
   const photoFileInputRef = useRef(null);
   const idFileInputRef = useRef(null);
+  const faceApiRef = useRef(null);
+  const faceApiModelsLoadedRef = useRef(false);
 
   useEffect(() => {
     if (typeof window !== "undefined") {
@@ -104,6 +112,7 @@ function Home({ amplifyOutputs }) {
 
     const dataUrl = canvas.toDataURL("image/jpeg", 0.92);
     setPhotoDataUrl(dataUrl);
+    resetBiometricState();
     stopCamera();
   };
 
@@ -122,6 +131,7 @@ function Home({ amplifyOutputs }) {
         reader.readAsDataURL(file);
       });
       setPhotoDataUrl(fileDataUrl);
+      resetBiometricState();
     } catch (error) {
       console.error("No se pudo cargar la foto", error);
     }
@@ -151,6 +161,13 @@ function Home({ amplifyOutputs }) {
     "w-full px-8 py-3 rounded-[20px] bg-[#12a150] hover:bg-[#0f8c46] active:bg-[#0b7439] text-white text-base font-bold shadow-sm transition-colors focus:outline-none focus:ring-2 focus:ring-[#12a150] focus:ring-offset-2 focus:ring-offset-white";
   const secondaryButtonClass =
     "px-3 py-2 text-xs rounded-[20px] border border-[#3864d9] bg-white hover:bg-[#ecf2ff] text-[#3864d9] font-semibold";
+
+  const resetBiometricState = () => {
+    setBiometricStatus("");
+    setBiometricError("");
+    setBiometricResult("");
+    setBiometricScore(null);
+  };
 
   const normalizeNameText = (value) =>
     (value || "")
@@ -308,12 +325,25 @@ function Home({ amplifyOutputs }) {
       }, type);
     });
 
+  const blobToDataUrl = (blob) =>
+    new Promise((resolve, reject) => {
+      const reader = new FileReader();
+      reader.onload = () => {
+        if (typeof reader.result === "string") resolve(reader.result);
+        else reject(new Error("No se pudo convertir el archivo a vista previa."));
+      };
+      reader.onerror = () =>
+        reject(new Error("No se pudo convertir el archivo a vista previa."));
+      reader.readAsDataURL(blob);
+    });
+
   const getOcrInputFromFile = async (file) => {
     const isPdf =
       file?.type === "application/pdf" || file?.name?.toLowerCase().endsWith(".pdf");
 
     if (!isPdf) {
-      return { input: file, sourceLabel: "imagen" };
+      const previewDataUrl = await blobToDataUrl(file);
+      return { input: file, sourceLabel: "imagen", previewDataUrl };
     }
 
     const pdfjs = await import("pdfjs-dist/legacy/build/pdf.mjs");
@@ -340,8 +370,130 @@ function Home({ amplifyOutputs }) {
     canvas.height = Math.floor(viewport.height);
     await page.render({ canvasContext: context, viewport }).promise;
     const renderedBlob = await canvasToBlob(canvas);
+    const previewDataUrl = await blobToDataUrl(renderedBlob);
 
-    return { input: renderedBlob, sourceLabel: "pdf (página 1)" };
+    return { input: renderedBlob, sourceLabel: "pdf (página 1)", previewDataUrl };
+  };
+
+  const loadImageFromDataUrl = (dataUrl) =>
+    new Promise((resolve, reject) => {
+      const image = new Image();
+      image.onload = () => resolve(image);
+      image.onerror = () =>
+        reject(new Error("No se pudo cargar la imagen para validación biométrica."));
+      image.src = dataUrl;
+    });
+
+  const getFaceApi = async () => {
+    if (faceApiRef.current) return faceApiRef.current;
+    const module = await import("face-api.js");
+    faceApiRef.current = module;
+    return module;
+  };
+
+  const loadFaceApiModels = async () => {
+    const faceapi = await getFaceApi();
+    if (faceApiModelsLoadedRef.current) return faceapi;
+
+    const modelSources = [
+      "/models",
+      "https://cdn.jsdelivr.net/gh/justadudewhohacks/face-api.js@master/weights",
+      "https://justadudewhohacks.github.io/face-api.js/models"
+    ];
+
+    setBiometricStatus("Cargando motor biométrico...");
+    let lastError = null;
+
+    for (const modelsBaseUrl of modelSources) {
+      try {
+        await Promise.all([
+          faceapi.nets.tinyFaceDetector.loadFromUri(modelsBaseUrl),
+          faceapi.nets.faceLandmark68Net.loadFromUri(modelsBaseUrl),
+          faceapi.nets.faceRecognitionNet.loadFromUri(modelsBaseUrl)
+        ]);
+        faceApiModelsLoadedRef.current = true;
+        return faceapi;
+      } catch (error) {
+        lastError = error;
+      }
+    }
+
+    throw (
+      lastError ||
+      new Error(
+        "No se pudieron cargar los modelos biométricos desde las fuentes configuradas."
+      )
+    );
+  };
+
+  const detectPrimaryDescriptor = async (faceapi, image) => {
+    const detections = await faceapi
+      .detectAllFaces(image, new faceapi.TinyFaceDetectorOptions())
+      .withFaceLandmarks()
+      .withFaceDescriptors();
+
+    if (!detections.length) return null;
+
+    const sorted = [...detections].sort((a, b) => {
+      const areaA = a.detection.box.width * a.detection.box.height;
+      const areaB = b.detection.box.width * b.detection.box.height;
+      return areaB - areaA;
+    });
+    return sorted[0].descriptor;
+  };
+
+  const runBiometricValidation = async () => {
+    resetBiometricState();
+
+    if (!idDocumentImageDataUrl) {
+      setBiometricError("Primero carga un documento de identidad con foto.");
+      return;
+    }
+    if (!photoDataUrl) {
+      setBiometricError("Primero captura o sube la foto del asegurado.");
+      return;
+    }
+
+    setIsBiometricRunning(true);
+    try {
+      const faceapi = await loadFaceApiModels();
+      setBiometricStatus("Preparando validación biométrica...");
+
+      const [documentImage, selfieImage] = await Promise.all([
+        loadImageFromDataUrl(idDocumentImageDataUrl),
+        loadImageFromDataUrl(photoDataUrl)
+      ]);
+
+      setBiometricStatus("Analizando rostro del documento...");
+      const documentDescriptor = await detectPrimaryDescriptor(faceapi, documentImage);
+      if (!documentDescriptor) {
+        throw new Error("No se detectó rostro en el documento cargado.");
+      }
+
+      setBiometricStatus("Analizando selfie del titular...");
+      const selfieDescriptor = await detectPrimaryDescriptor(faceapi, selfieImage);
+      if (!selfieDescriptor) {
+        throw new Error("No se detectó rostro en la foto del asegurado.");
+      }
+
+      const distance = faceapi.euclideanDistance(documentDescriptor, selfieDescriptor);
+      const threshold = 0.55;
+      const score = Math.max(0, Math.min(1, 1 - distance / 0.8));
+      const isMatch = distance <= threshold;
+
+      setBiometricScore(score);
+      setBiometricResult(isMatch ? "match" : "no_match");
+      setBiometricStatus(
+        isMatch
+          ? "Validación biométrica aprobada."
+          : "Validación biométrica no concluyente."
+      );
+    } catch (error) {
+      console.error("Error en validación biométrica", error);
+      setBiometricError(error?.message || "No se pudo completar la validación biométrica.");
+    } finally {
+      setIsBiometricRunning(false);
+    }
   };
 
   const handleIdFileChange = async (event) => {
@@ -353,6 +505,7 @@ function Home({ amplifyOutputs }) {
     setIdReadDebug("");
     setOcrStatus("Preparando análisis del documento...");
     setIdFileName(file.name || "");
+    resetBiometricState();
     setIsReadingId(true);
 
     try {
@@ -364,7 +517,8 @@ function Home({ amplifyOutputs }) {
         throw new Error("No se pudo inicializar OCR en el navegador.");
       }
 
-      const { input: ocrInput, sourceLabel } = await getOcrInputFromFile(file);
+      const { input: ocrInput, sourceLabel, previewDataUrl } = await getOcrInputFromFile(file);
+      setIdDocumentImageDataUrl(previewDataUrl || "");
       const toSpanishStatus = (status) => {
         const normalized = (status || "").toLowerCase();
         if (normalized.includes("loading")) return "Cargando motor OCR...";
@@ -424,6 +578,7 @@ function Home({ amplifyOutputs }) {
 
   const clearAttachedIdFile = () => {
     setIdFileName("");
+    setIdDocumentImageDataUrl("");
     setIdReadError("");
     setIdReadSuccess("");
     setIdReadDebug("");
@@ -431,9 +586,11 @@ function Home({ amplifyOutputs }) {
     setFirstNames("");
     setLastNames("");
     setOcrStatus("");
+    setIsBiometricRunning(false);
     if (idFileInputRef.current) {
       idFileInputRef.current.value = "";
     }
+    resetBiometricState();
   };
 
   const handleSubmit = (event) => {
@@ -719,6 +876,7 @@ function Home({ amplifyOutputs }) {
                           type="button"
                           onClick={() => {
                             setPhotoDataUrl("");
+                            resetBiometricState();
                             if (photoFileInputRef.current) {
                               photoFileInputRef.current.value = "";
                             }
@@ -731,6 +889,53 @@ function Home({ amplifyOutputs }) {
                     </div>
                     <canvas ref={canvasRef} className="hidden" />
                   </div>
+                </div>
+
+                <div className="rounded-[12px] border border-[#d9e3fb] bg-[#f6f9ff] p-3">
+                  <p className="text-sm font-semibold text-[#22355d]">
+                    Validación biométrica
+                  </p>
+                  <p className="mt-1 text-xs text-[#5f6f8f]">
+                    Compara rostro del documento con la foto del titular.
+                  </p>
+                  <div className="mt-2 grid grid-cols-1 sm:grid-cols-2 gap-2 text-xs">
+                    <p className="rounded-[8px] bg-white border border-[#d9e3fb] px-2 py-1 text-[#34517f]">
+                      Documento: {idDocumentImageDataUrl ? "Listo" : "Pendiente"}
+                    </p>
+                    <p className="rounded-[8px] bg-white border border-[#d9e3fb] px-2 py-1 text-[#34517f]">
+                      Foto titular: {photoDataUrl ? "Lista" : "Pendiente"}
+                    </p>
+                  </div>
+                  <div className="mt-2">
+                    <button
+                      type="button"
+                      onClick={runBiometricValidation}
+                      disabled={isBiometricRunning}
+                      className="px-3 py-2 text-xs rounded-[20px] border border-[#12a150] bg-[#12a150] hover:bg-[#0f8c46] text-white font-semibold disabled:opacity-70"
+                    >
+                      {isBiometricRunning ? "Validando..." : "Validar biometría"}
+                    </button>
+                  </div>
+                  {biometricStatus ? (
+                    <p className="mt-2 text-xs text-[#34517f]">{biometricStatus}</p>
+                  ) : null}
+                  {biometricError ? (
+                    <p className="mt-2 text-xs text-[#b42318]">{biometricError}</p>
+                  ) : null}
+                  {biometricResult ? (
+                    <p
+                      className={`mt-2 text-xs font-semibold ${
+                        biometricResult === "match" ? "text-[#0f8c46]" : "text-[#b42318]"
+                      }`}
+                    >
+                      {biometricResult === "match"
+                        ? "Coincidencia biométrica: Aprobada"
+                        : "Coincidencia biométrica: Revisar manualmente"}
+                      {typeof biometricScore === "number"
+                        ? ` (${Math.round(biometricScore * 100)}%)`
+                        : ""}
+                    </p>
+                  ) : null}
                 </div>
 
                 <div className="pt-2">
@@ -761,7 +966,7 @@ function Home({ amplifyOutputs }) {
   const displayEmail = email || "juan.perez@ejemplo.com";
   const displayId = identificationNumber || "V12345678";
   const displayPolicy = `POL-${displayId.replace(/[^0-9]/g, "").slice(-6) || "000001"}`;
-  const demoQrData = `LBC-DEMO|${displayId}|${displayPolicy}|${displayEmail}`;
+  const demoQrData = `LBC|${displayId}|${displayPolicy}|${displayEmail}`;
   const demoQrUrl = `https://api.qrserver.com/v1/create-qr-code/?size=220x220&margin=0&data=${encodeURIComponent(
     demoQrData
   )}`;
