@@ -134,9 +134,6 @@ function Home() {
   );
 
   const apiBaseUrl = import.meta.env.VITE_API_URL || "http://localhost:3001";
-  const danaConversationLambdaUrl =
-    import.meta.env.VITE_DANA_CONVERSATION_LAMBDA_URL ||
-    "https://obtip6skjpwxwwwrosxaw5zn4u0dohkq.lambda-url.us-east-1.on.aws/";
 
   const inputClass =
     "w-full rounded-[8px] border border-[#8a8a8a]/70 px-3 py-2 text-sm text-[#1d2b4f] bg-white focus:outline-none focus:ring-2 focus:ring-[#3864d9] focus:border-[#3864d9]";
@@ -145,23 +142,71 @@ function Home() {
   const secondaryButtonClass =
     "px-3 py-2 text-xs rounded-[20px] border border-[#3864d9] bg-white hover:bg-[#ecf2ff] text-[#3864d9] font-semibold";
 
+  const toBase64 = (arrayBuffer) => {
+    const bytes = new Uint8Array(arrayBuffer);
+    const chunkSize = 0x8000;
+    let binary = "";
+    for (let i = 0; i < bytes.length; i += chunkSize) {
+      const chunk = bytes.subarray(i, i + chunkSize);
+      binary += String.fromCharCode(...chunk);
+    }
+    return window.btoa(binary);
+  };
+
+  const buildPkpassBase64 = async ({ name, mail, photo }) => {
+    const response = await fetch(`${apiBaseUrl.replace(/\/+$/, "")}/pkpass`, {
+      method: "POST",
+      headers: {
+        "Content-Type": "application/json"
+      },
+      body: JSON.stringify({
+        name,
+        email: mail,
+        photoDataUrl: photo
+      })
+    });
+
+    if (!response.ok) {
+      throw new Error("No se pudo generar el archivo .pkpass");
+    }
+
+    const pkpassBuffer = await response.arrayBuffer();
+    return toBase64(pkpassBuffer);
+  };
+
   const handleSubmit = async (event) => {
     event.preventDefault();
     const mergedFullName = `${firstNames} ${lastNames}`.replace(/\s+/g, " ").trim();
     const payload = {
-      nombreCompleto: mergedFullName || "Asegurado sin nombre",
-      numeroCedula: identificationNumber || "",
-      email: email || ""
+      NOMBRECLIENTE: mergedFullName || "Asegurado sin nombre",
+      DOCUMENT_ID: identificationNumber || "",
+      EMAIL: email || ""
     };
 
     try {
-      const lambdaResponse = await fetch(danaConversationLambdaUrl, {
-        method: "POST",
-        headers: {
-          "Content-Type": "application/json"
-        },
-        body: JSON.stringify(payload)
+      const photo =
+        typeof window !== "undefined"
+          ? window.localStorage.getItem("walletPhoto")
+          : null;
+      const pkpassBase64 = await buildPkpassBase64({
+        name: payload.NOMBRECLIENTE,
+        mail: payload.EMAIL,
+        photo
       });
+
+      const lambdaResponse = await fetch(
+        `${apiBaseUrl.replace(/\/+$/, "")}/dana/conversation`,
+        {
+          method: "POST",
+          headers: {
+            "Content-Type": "application/json"
+          },
+          body: JSON.stringify({
+            ...payload,
+            PKPASS_FILE_BASE64: pkpassBase64
+          })
+        }
+      );
 
       if (!lambdaResponse.ok) {
         const lambdaText = await lambdaResponse.text().catch(() => "");
@@ -171,22 +216,7 @@ function Home() {
         );
       }
     } catch (error) {
-      console.error("Error al activar conversación vía Lambda", error);
-      try {
-        await fetch(`${apiBaseUrl.replace(/\/+$/, "")}/dana-contact`, {
-          method: "POST",
-          headers: {
-            "Content-Type": "application/json"
-          },
-          body: JSON.stringify({
-            name: payload.nombreCompleto,
-            email: payload.email,
-            photoDataUrl
-          })
-        });
-      } catch (fallbackError) {
-        console.error("Error en fallback /dana-contact", fallbackError);
-      }
+      console.error("Error al enviar pkpass al backend Lambda", error);
     }
 
     setIsPreview(true);

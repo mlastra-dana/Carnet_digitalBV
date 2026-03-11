@@ -217,6 +217,31 @@ app.get("/ping", async (req, res) => {
   }
 });
 
+app.post("/dana/conversation", async (req, res) => {
+  try {
+    const lambdaResponse = await helloWorld(
+      {
+        rawPath: "/dana/conversation",
+        requestContext: { http: { method: "POST" } },
+        body: JSON.stringify(req.body || {})
+      },
+      { awsRequestId: "local-express-dana-conversation" },
+      null
+    );
+
+    const statusCode = lambdaResponse?.statusCode || 200;
+    const headers = lambdaResponse?.headers || {};
+    const body = lambdaResponse?.body || "";
+    res.status(statusCode).set(headers).send(body);
+  } catch (error) {
+    console.error("Error en /dana/conversation", error);
+    res.status(500).json({
+      ok: false,
+      message: "Internal server error in local mock /dana/conversation"
+    });
+  }
+});
+
 app.post("/dana-contact", async (req, res) => {
   try {
     const name = (req.body?.name || "").toString();

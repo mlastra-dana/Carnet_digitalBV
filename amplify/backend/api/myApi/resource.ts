@@ -8,7 +8,11 @@ export const myApi = api({
       path: "/ping",
       method: "GET",
       function: helloWorld
+    },
+    {
+      path: "/dana/conversation",
+      method: "POST",
+      function: helloWorld
     }
   ]
 });
-
