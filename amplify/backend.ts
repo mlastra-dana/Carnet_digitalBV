@@ -2,7 +2,7 @@ import { defineBackend } from "@aws-amplify/backend";
 import { myApi } from "./backend/api/myApi/resource";
 import { helloWorld } from "./backend/functions/helloWorld/resource";
 import { addOutput } from "@aws-amplify/backend-output-plugin";
-import { generatePkpass } from "./generatePkpass/resource";
+import { generatePkpass } from "./backend/functions/generatePkpass/resource";
 
 
 const backend = defineBackend({

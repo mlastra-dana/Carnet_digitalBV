@@ -1,6 +1,6 @@
-import React, { useEffect, useRef, useState } from "react";
+import React, { useEffect, useMemo, useRef, useState } from "react";
 
-function Home() {
+function Home({ amplifyOutputs }) {
   const [firstNames, setFirstNames] = useState("");
   const [lastNames, setLastNames] = useState("");
   const [identificationNumber, setIdentificationNumber] = useState("");
@@ -17,9 +17,9 @@ function Home() {
   const photoFileInputRef = useRef(null);
 
   useEffect(() => {
-    if (typeof window === "undefined") return;
-    const stored = window.localStorage.getItem("walletPhoto");
-    if (stored) setPhotoDataUrl(stored);
+    if (typeof window !== "undefined") {
+      window.localStorage.removeItem("walletPhoto");
+    }
   }, []);
 
   useEffect(() => {
@@ -98,9 +98,6 @@ function Home() {
 
     const dataUrl = canvas.toDataURL("image/jpeg", 0.92);
     setPhotoDataUrl(dataUrl);
-    if (typeof window !== "undefined") {
-      window.localStorage.setItem("walletPhoto", dataUrl);
-    }
     stopCamera();
   };
 
@@ -119,9 +116,6 @@ function Home() {
         reader.readAsDataURL(file);
       });
       setPhotoDataUrl(fileDataUrl);
-      if (typeof window !== "undefined") {
-        window.localStorage.setItem("walletPhoto", fileDataUrl);
-      }
     } catch (error) {
       console.error("No se pudo cargar la foto", error);
     }
@@ -135,7 +129,15 @@ function Home() {
     []
   );
 
-  const apiBaseUrl = import.meta.env.VITE_API_URL || "http://localhost:3001";
+  const apiBaseUrl = useMemo(() => {
+    if (import.meta.env.VITE_API_URL) {
+      return import.meta.env.VITE_API_URL;
+    }
+    if (amplifyOutputs?.apiUrl) {
+      return amplifyOutputs.apiUrl;
+    }
+    return "http://localhost:3001";
+  }, [amplifyOutputs]);
 
   const inputClass =
     "w-full rounded-[8px] border border-[#8a8a8a]/70 px-3 py-2 text-sm text-[#1d2b4f] bg-white focus:outline-none focus:ring-2 focus:ring-[#3864d9] focus:border-[#3864d9]";
@@ -189,9 +191,7 @@ function Home() {
 
     try {
       const photo =
-        typeof window !== "undefined"
-          ? window.localStorage.getItem("walletPhoto")
-          : null;
+        photoDataUrl || null;
       const pkpassBase64 = await buildPkpassBase64({
         name: payload.NOMBRECLIENTE,
         mail: payload.EMAIL,
@@ -224,13 +224,12 @@ function Home() {
       if (!responseData?.ok) {
         throw new Error(responseData?.message || "Respuesta inválida del backend.");
       }
-
-      setIsPreview(true);
     } catch (error) {
       console.error("Error al enviar pkpass al backend Lambda", error);
       setSubmitError("No se pudo subir la información a Dana. Intenta nuevamente.");
     } finally {
       setIsSubmitting(false);
+      setIsPreview(true);
     }
   };
 
@@ -395,9 +394,6 @@ function Home() {
                             if (photoFileInputRef.current) {
                               photoFileInputRef.current.value = "";
                             }
-                            if (typeof window !== "undefined") {
-                              window.localStorage.removeItem("walletPhoto");
-                            }
                           }}
                           className={secondaryButtonClass}
                         >
@@ -480,6 +476,9 @@ function Home() {
         <div className="p-6 sm:p-8 text-center">
           <h1 className="text-2xl font-bold text-[#22355d]">Vista previa del carnet</h1>
           <p className="text-sm text-[#5f6f8f] mt-1">Así se verá el carnet digital del asegurado.</p>
+          {submitError ? (
+            <p className="mt-3 text-sm text-[#b42318]">{submitError}</p>
+          ) : null}
 
           <div className="mt-6">
             <div className="mx-auto max-w-[420px] rounded-[24px] overflow-hidden shadow-[0_20px_44px_rgba(35,87,202,0.24)] border border-[#b9ccfa] bg-gradient-to-br from-[#3559c4] via-[#2f4da9] to-[#25428f] text-white">
@@ -519,9 +518,7 @@ function Home() {
                     <img
                       src={
                         photoDataUrl ||
-                        (typeof window !== "undefined" && window.localStorage.getItem("walletPhoto")
-                          ? window.localStorage.getItem("walletPhoto")
-                          : "https://media.istockphoto.com/id/1389348844/es/foto/foto-de-estudio-de-una-hermosa-joven-sonriendo-mientras-est%C3%A1-de-pie-sobre-un-fondo-gris.jpg?s=612x612&w=0&k=20&c=kUufmNoTnDcRbyeHhU1wRiip-fNjTWP9owjHf75frFQ=")
+                        "https://media.istockphoto.com/id/1389348844/es/foto/foto-de-estudio-de-una-hermosa-joven-sonriendo-mientras-est%C3%A1-de-pie-sobre-un-fondo-gris.jpg?s=612x612&w=0&k=20&c=kUufmNoTnDcRbyeHhU1wRiip-fNjTWP9owjHf75frFQ="
                       }
                       alt="Foto del asegurado"
                       className="w-full h-full object-cover"
