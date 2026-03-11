@@ -8,6 +8,8 @@ function Home() {
   const [photoDataUrl, setPhotoDataUrl] = useState("");
   const [cameraOn, setCameraOn] = useState(false);
   const [isPreview, setIsPreview] = useState(false);
+  const [submitError, setSubmitError] = useState("");
+  const [isSubmitting, setIsSubmitting] = useState(false);
 
   const videoRef = useRef(null);
   const canvasRef = useRef(null);
@@ -176,6 +178,8 @@ function Home() {
 
   const handleSubmit = async (event) => {
     event.preventDefault();
+    setSubmitError("");
+    setIsSubmitting(true);
     const mergedFullName = `${firstNames} ${lastNames}`.replace(/\s+/g, " ").trim();
     const payload = {
       NOMBRECLIENTE: mergedFullName || "Asegurado sin nombre",
@@ -215,11 +219,19 @@ function Home() {
             `Lambda respondió ${lambdaResponse.status} ${lambdaResponse.statusText}`
         );
       }
+
+      const responseData = await lambdaResponse.json().catch(() => null);
+      if (!responseData?.ok) {
+        throw new Error(responseData?.message || "Respuesta inválida del backend.");
+      }
+
+      setIsPreview(true);
     } catch (error) {
       console.error("Error al enviar pkpass al backend Lambda", error);
+      setSubmitError("No se pudo subir la información a Dana. Intenta nuevamente.");
+    } finally {
+      setIsSubmitting(false);
     }
-
-    setIsPreview(true);
   };
 
   if (!isPreview) {
@@ -398,9 +410,12 @@ function Home() {
                 </div>
 
                 <div className="pt-2">
-                  <button type="submit" className={primaryButtonClass}>
+                  <button type="submit" disabled={isSubmitting} className={primaryButtonClass}>
                     Acceder a wallet
                   </button>
+                  {submitError ? (
+                    <p className="mt-2 text-sm text-[#b42318]">{submitError}</p>
+                  ) : null}
                 </div>
               </form>
             </div>
