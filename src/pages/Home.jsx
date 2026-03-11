@@ -22,6 +22,10 @@ function Home() {
   const canvasRef = useRef(null);
   const streamRef = useRef(null);
   const idFileInputRef = useRef(null);
+  const photoFileInputRef = useRef(null);
+  const ocrRunIdRef = useRef(0);
+  const ocrWorkerRef = useRef(null);
+  const ocrScratchRef = useRef(null);
 
   useEffect(() => {
     if (typeof window === "undefined") return;
@@ -30,6 +34,20 @@ function Home() {
       setPhotoDataUrl(stored);
     }
   }, []);
+
+  useEffect(() => {
+    if (!cameraOn) return;
+    const video = videoRef.current;
+    const stream = streamRef.current;
+    if (!video || !stream) return;
+
+    // Ensures the stream is attached once the video element is mounted.
+    // eslint-disable-next-line no-param-reassign
+    video.srcObject = stream;
+    video.play().catch((error) => {
+      console.error("No se pudo reproducir la cámara", error);
+    });
+  }, [cameraOn]);
 
   const stopCamera = () => {
     const stream = streamRef.current;
@@ -47,13 +65,15 @@ function Home() {
   const startCamera = async () => {
     if (typeof navigator === "undefined" || !navigator.mediaDevices) return;
     try {
-      const stream = await navigator.mediaDevices.getUserMedia({ video: true });
+      stopCamera();
+      const stream = await navigator.mediaDevices.getUserMedia({
+        video: {
+          facingMode: "user",
+          width: { ideal: 1920 },
+          height: { ideal: 1080 }
+        }
+      });
       streamRef.current = stream;
-      if (videoRef.current) {
-        // eslint-disable-next-line no-param-reassign
-        videoRef.current.srcObject = stream;
-        await videoRef.current.play();
-      }
       setCameraOn(true);
     } catch (error) {
       console.error("No se pudo iniciar la cámara", error);
@@ -64,16 +84,58 @@ function Home() {
     if (!videoRef.current || !canvasRef.current) return;
     const video = videoRef.current;
     const canvas = canvasRef.current;
-    const size = 320;
-    canvas.width = size;
-    canvas.height = size;
+    const sourceWidth = video.videoWidth || 1280;
+    const sourceHeight = video.videoHeight || 720;
+    const targetRatio = 3 / 4; // portrait
+    const sourceRatio = sourceWidth / sourceHeight;
+    let cropWidth = sourceWidth;
+    let cropHeight = sourceHeight;
+
+    if (sourceRatio > targetRatio) {
+      cropWidth = Math.floor(sourceHeight * targetRatio);
+    } else {
+      cropHeight = Math.floor(sourceWidth / targetRatio);
+    }
+
+    const sx = Math.floor((sourceWidth - cropWidth) / 2);
+    const sy = Math.floor((sourceHeight - cropHeight) / 2);
+    const outWidth = 900;
+    const outHeight = 1200;
+    canvas.width = outWidth;
+    canvas.height = outHeight;
     const ctx = canvas.getContext("2d");
     if (!ctx) return;
-    ctx.drawImage(video, 0, 0, size, size);
-    const dataUrl = canvas.toDataURL("image/png");
+    ctx.imageSmoothingEnabled = true;
+    ctx.imageSmoothingQuality = "high";
+    ctx.drawImage(video, sx, sy, cropWidth, cropHeight, 0, 0, outWidth, outHeight);
+    const dataUrl = canvas.toDataURL("image/jpeg", 0.92);
     setPhotoDataUrl(dataUrl);
     if (typeof window !== "undefined") {
       window.localStorage.setItem("walletPhoto", dataUrl);
+    }
+    stopCamera();
+  };
+
+  const handlePhotoFileChange = async (event) => {
+    const file = event.target.files?.[0];
+    if (!file) return;
+    try {
+      stopCamera();
+      const fileDataUrl = await new Promise((resolve, reject) => {
+        const reader = new FileReader();
+        reader.onload = () => {
+          if (typeof reader.result === "string") resolve(reader.result);
+          else reject(new Error("No se pudo leer la foto."));
+        };
+        reader.onerror = () => reject(new Error("No se pudo leer la foto."));
+        reader.readAsDataURL(file);
+      });
+      setPhotoDataUrl(fileDataUrl);
+      if (typeof window !== "undefined") {
+        window.localStorage.setItem("walletPhoto", fileDataUrl);
+      }
+    } catch (error) {
+      console.error("No se pudo cargar la foto", error);
     }
   };
 
@@ -86,6 +148,9 @@ function Home() {
   );
 
   const apiBaseUrl = import.meta.env.VITE_API_URL || "http://localhost:3001";
+  const danaConversationLambdaUrl =
+    import.meta.env.VITE_DANA_CONVERSATION_LAMBDA_URL ||
+    "https://obtip6skjpwxwwwrosxaw5zn4u0dohkq.lambda-url.us-east-1.on.aws/";
   const inputClass =
     "w-full rounded-[8px] border border-[#8a8a8a]/70 px-3 py-2 text-sm text-[#1d2b4f] bg-white focus:outline-none focus:ring-2 focus:ring-[#3864d9] focus:border-[#3864d9]";
   const primaryButtonClass =
@@ -169,7 +234,7 @@ function Home() {
     return regions;
   };
 
-  const extractFieldValuesFromWords = (_ocrWords, rawText = "") => {
+  const extractFieldValuesFromWords = (ocrWords, rawText = "") => {
     const text = rawText || "";
     const upper = text.toUpperCase();
     const normalized = text
@@ -178,7 +243,7 @@ function Home() {
       .toUpperCase();
 
     const noiseWordsRegex =
-      /\b(APELLIDOS?|NOMBRES?|EXPEDICION|VENCIMIENTO|COMPROBANTE|REPUBLICA|BOLIVARIANA|VENEZUELA|IDENTIDAD|CEDULA|RIF|SENIAT|FECHA|INSCRIPCION|DOMICILIO|FISCAL|ACTUALIZACION|FIRMA|AUTORIZADA|CONDICION|CONTRIBUYENTE|TASA)\b/gi;
+      /\b(APELLIDOS?|NOMBRES?|EXPEDICION|VENCIMIENTO|COMPROBANTE|REPUBLICA|BOLIVARIANA|VENEZUELA|IDENTIDAD|CEDULA|RIF|SENIAT|FECHA|INSCRIPCION|DOMICILIO|FISCAL|ACTUALIZACION|FIRMA|AUTORIZADA|CONDICION|CONTRIBUYENTE|TASA|DIRECTOR)\b/gi;
 
     const cleanText = (value) =>
       (value || "")
@@ -187,7 +252,11 @@ function Home() {
         .trim();
 
     const cleanName = (value) =>
-      cleanText(value).replace(noiseWordsRegex, "").replace(/\s+/g, " ").trim();
+      cleanText(value)
+        .replace(noiseWordsRegex, "")
+        .replace(/\bGUSTAVO\s+VIZCAINO\b/gi, "")
+        .replace(/\s+/g, " ")
+        .trim();
 
     const normalizeId = (value) => {
       const compact = (value || "")
@@ -199,6 +268,16 @@ function Home() {
       return null;
     };
 
+    const isStrongPersonName = (value) => {
+      const cleaned = cleanName(value);
+      if (!cleaned) return false;
+      if (/\d/.test(cleaned)) return false;
+      const words = cleaned.split(" ").filter(Boolean);
+      if (words.length < 2 || words.length > 6) return false;
+      const meaningfulWords = words.filter((word) => word.length >= 2);
+      return meaningfulWords.length >= 2;
+    };
+
     const isLikelyNameText = (value) => {
       const cleaned = cleanName(value);
       if (!cleaned) return false;
@@ -208,20 +287,120 @@ function Home() {
       return cleaned.replace(/\s+/g, "").length >= 6;
     };
 
+    const wordsWithBoxes = Array.isArray(ocrWords)
+      ? ocrWords
+          .map((word) => {
+            const textValue = (word?.text || "").trim();
+            if (!textValue) return null;
+            const box = getBox(word);
+            const cy = (box.y0 + box.y1) / 2;
+            return {
+              text: textValue,
+              normalized: normalizeToken(textValue),
+              box,
+              cy
+            };
+          })
+          .filter(Boolean)
+      : [];
+
+    const isNameWordToken = (value) => {
+      const cleaned = cleanName(value);
+      if (!cleaned) return false;
+      if (/\d/.test(cleaned)) return false;
+      return /^[A-ZÁÉÍÓÚÑÜ]+(?:-[A-ZÁÉÍÓÚÑÜ]+)?$/.test(cleaned);
+    };
+
+    const extractInlineValueByLabel = (labelRegex, maxWords = 3) => {
+      if (!wordsWithBoxes.length) return "";
+      const labels = wordsWithBoxes
+        .filter((word) => labelRegex.test(word.normalized))
+        .sort((a, b) => a.box.y0 - b.box.y0 || a.box.x0 - b.box.x0);
+
+      for (const label of labels) {
+        const labelHeight = Math.max(10, label.box.y1 - label.box.y0);
+        const sameLine = wordsWithBoxes
+          .filter((word) => {
+            if (word.box.x0 <= label.box.x1 - 5) return false;
+            if (Math.abs(word.cy - label.cy) > Math.max(16, labelHeight * 1.7)) {
+              return false;
+            }
+            return isNameWordToken(word.text);
+          })
+          .sort((a, b) => a.box.x0 - b.box.x0);
+
+        if (!sameLine.length) continue;
+
+        const contiguous = [];
+        for (const candidate of sameLine) {
+          if (!contiguous.length) {
+            contiguous.push(candidate);
+            continue;
+          }
+          const prev = contiguous[contiguous.length - 1];
+          const maxGap = Math.max(55, labelHeight * 4);
+          if (candidate.box.x0 - prev.box.x1 <= maxGap) {
+            contiguous.push(candidate);
+          } else {
+            break;
+          }
+        }
+
+        const joined = cleanName(
+          contiguous
+            .slice(0, maxWords)
+            .map((word) => word.text)
+            .join(" ")
+        );
+        if (joined && joined.split(" ").length >= 1) {
+          return joined;
+        }
+      }
+
+      return "";
+    };
+
     const getValueAfterKeyword = (line, keywordRegex) => {
       const side = line.split("|")[0] ?? line;
       return cleanName(side.replace(keywordRegex, " "));
     };
 
-    const cedulaMatch =
-      /(V|E)\s*[-.]?\s*(\d(?:[\d.\s-]{5,12}\d))/.exec(upper) ??
-      /(C[ÉE]DULA|IDENTIDAD)\s*[:\-]?\s*(\d(?:[\d.\s-]{5,12}\d))/.exec(upper);
-    const cedulaRaw = cedulaMatch
-      ? `${cedulaMatch[1] && cedulaMatch[1].length === 1 ? cedulaMatch[1] : "V"}${
-          cedulaMatch[2] ?? cedulaMatch[1]
-        }`
-      : null;
-    const cedula = cedulaRaw ? normalizeId(cedulaRaw) : null;
+    const extractCedula = () => {
+      const directMatches = [
+        /(V|E)\s*[-.:]?\s*(\d{1,2}(?:[.\s]\d{3}){1,3})/.exec(upper),
+        /(V|E)\s*[-.:]?\s*(\d{6,10})/.exec(upper),
+        /(C[ÉE]DULA|IDENTIDAD)\s*[:\-]?\s*(\d{1,2}(?:[.\s]\d{3}){1,3})/.exec(upper),
+        /(C[ÉE]DULA|IDENTIDAD)\s*[:\-]?\s*(\d{6,10})/.exec(upper)
+      ].filter(Boolean);
+
+      for (const match of directMatches) {
+        const rawPrefix = match[1];
+        const rawNumber = match[2] || "";
+        const normalizedNumber = rawNumber.replace(/[^\d]/g, "");
+        if (/^\d{6,10}$/.test(normalizedNumber)) {
+          const prefix = rawPrefix && /^[VE]$/.test(rawPrefix) ? rawPrefix : "V";
+          return `${prefix}${normalizedNumber}`;
+        }
+      }
+
+      const numericTokens = upper
+        .split(/[^A-Z0-9.]+/)
+        .map((token) => token.trim())
+        .filter(Boolean);
+      for (let i = 0; i < numericTokens.length - 1; i += 1) {
+        const token = numericTokens[i];
+        const next = numericTokens[i + 1];
+        if (!/^[VE]$/.test(token)) continue;
+        const nextDigits = (next || "").replace(/[^\d]/g, "");
+        if (/^\d{6,10}$/.test(nextDigits)) {
+          return `${token}${nextDigits}`;
+        }
+      }
+
+      return "";
+    };
+
+    const cedula = normalizeId(extractCedula() || "");
 
     const lines = text.split(/\r?\n+/);
     const normalizedLines = normalized.split(/\r?\n+/);
@@ -233,12 +412,35 @@ function Home() {
     const apellidoLine = apellidoIndex >= 0 ? lines[apellidoIndex] : "";
     const nombreLine = nombreIndex >= 0 ? lines[nombreIndex] : "";
 
-    let apellidos = apellidoLine
+    let apellidos =
+      extractInlineValueByLabel(/APELLID|ARELLID|PELLID/) ||
+      (apellidoLine
       ? getValueAfterKeyword(apellidoLine, /A\w*P?E?L?L?I?D?\w*/i)
-      : "";
-    let nombres = nombreLine
+      : "");
+    let nombres =
+      extractInlineValueByLabel(/NOMB|NOMBR|N0MB|NOM8|VOVER|VOBER/, 4) ||
+      (nombreLine
       ? getValueAfterKeyword(nombreLine, /N\w*O?M?B?R?\w*|VOW?ER\w*|N0MB\w*|NOM8\w*/i)
-      : "";
+      : "");
+
+    if (!isStrongPersonName(apellidos) || !isStrongPersonName(nombres)) {
+      for (const line of lines) {
+        const normLine = line
+          .normalize("NFD")
+          .replace(/[\u0300-\u036f]/g, "")
+          .toUpperCase();
+        if (!apellidos && /APELLID|ARELLID|PELLID/.test(normLine)) {
+          const candidate = cleanName(line.replace(/.*APELLID\w*/i, ""));
+          if (isStrongPersonName(candidate)) apellidos = candidate;
+        }
+        if (!nombres && /NOMB|NOMBR|N0MB|NOM8|VOVER|VOBER/.test(normLine)) {
+          const candidate = cleanName(
+            line.replace(/.*(N\w{0,4}OMB\w*|VOW?ER\w*|N0MB\w*|NOM8\w*)/i, "")
+          );
+          if (isStrongPersonName(candidate)) nombres = candidate;
+        }
+      }
+    }
 
     if (!nombres || !apellidos) {
       const labeledLines = lines.filter((line) =>
@@ -306,7 +508,11 @@ function Home() {
 
     const cleanFullName = cleanDetectedValue(`${nombres} ${apellidos}`, {
       allowDigits: false
-    });
+    })
+      .replace(/\bGUSTAVO\s+VIZCAINO\b/gi, "")
+      .replace(/^(?:[A-Z]\s+){1,2}(?=[A-Z]{3,})/g, "")
+      .replace(/\s+/g, " ")
+      .trim();
 
     return {
       fullName: cleanFullName || "",
@@ -314,6 +520,49 @@ function Home() {
       hasNombres: Boolean(nombres),
       hasApellidos: Boolean(apellidos)
     };
+  };
+
+  const normalizeCedulaCandidate = (value) => {
+    const raw = (value || "").toUpperCase().replace(/[^\dVE]/g, "");
+    const prefix = raw.startsWith("V") || raw.startsWith("E") ? raw[0] : "V";
+    const digits = raw.replace(/[^\d]/g, "");
+    if (digits.length < 6 || digits.length > 10) return "";
+    return `${prefix}${digits}`;
+  };
+
+  const isStrongFullNameCandidate = (value) => {
+    const cleaned = cleanDetectedValue(value || "", { allowDigits: false });
+    if (!cleaned || /\d/.test(cleaned)) return false;
+    const parts = cleaned.split(" ").filter(Boolean);
+    return parts.length >= 3 && parts.length <= 6;
+  };
+
+  const getLabelNameTokens = (text) => {
+    if (!text) return [];
+    const lines = text.split(/\r?\n+/);
+    const tokens = [];
+    for (const line of lines) {
+      const normalized = line
+        .normalize("NFD")
+        .replace(/[\u0300-\u036f]/g, "")
+        .toUpperCase();
+      if (!/NOMB|APELL|PELLID|ELLID|N0MB|NOM8|VOVER|VOBER/.test(normalized)) {
+        continue;
+      }
+      const cleaned = cleanDetectedValue(
+        line.replace(
+          /.*(APELLID\w*|ARELLID\w*|PELLID\w*|N\w{0,4}OMB\w*|VOW?ER\w*|N0MB\w*|NOM8\w*)/i,
+          " "
+        ),
+        { allowDigits: false }
+      );
+      const lineTokens = cleaned
+        .split(" ")
+        .map((token) => token.trim())
+        .filter((token) => token.length >= 3 && !/\d/.test(token));
+      tokens.push(...lineTokens);
+    }
+    return tokens;
   };
 
   const drawOcrRegionsOnImage = async (baseDataUrl, regions) => {
@@ -368,11 +617,22 @@ function Home() {
   };
 
   const runCedulaOcr = async (file) => {
+    const runId = ocrRunIdRef.current + 1;
+    ocrRunIdRef.current = runId;
+    const isRunActive = () => ocrRunIdRef.current === runId;
+
+    const cancelError = new Error("OCR_CANCELLED");
+    const ensureRunActive = () => {
+      if (!isRunActive()) throw cancelError;
+    };
+
     setIsOcrRunning(true);
     setOcrError("");
     setOcrProgress(0);
+    let workerForRun = null;
 
     try {
+      ensureRunActive();
       const isPdf =
         file.type === "application/pdf" ||
         file.name.toLowerCase().endsWith(".pdf");
@@ -387,8 +647,10 @@ function Home() {
         pdfjs.GlobalWorkerOptions.workerSrc = pdfWorker.default || pdfWorker;
 
         const fileBuffer = await file.arrayBuffer();
+        ensureRunActive();
         const loadingTask = pdfjs.getDocument({ data: fileBuffer });
         const pdf = await loadingTask.promise;
+        ensureRunActive();
         const firstPage = await pdf.getPage(1);
         const viewport = firstPage.getViewport({ scale: 2 });
         const pdfCanvas = document.createElement("canvas");
@@ -404,6 +666,7 @@ function Home() {
           canvasContext: pdfContext,
           viewport
         }).promise;
+        ensureRunActive();
 
         baseCanvas = pdfCanvas;
         previewDataUrl = pdfCanvas.toDataURL("image/png");
@@ -438,6 +701,7 @@ function Home() {
         }
         imgCtx.drawImage(img, 0, 0, imgCanvas.width, imgCanvas.height);
         baseCanvas = imgCanvas;
+        ensureRunActive();
       }
 
       if (previewDataUrl) {
@@ -475,31 +739,52 @@ function Home() {
         return score;
       };
 
-      const { recognize } = await import("tesseract.js");
+      const { createWorker } = await import("tesseract.js");
+      let currentAngleIndex = 0;
+      let currentAnglesLength = 1;
+      const worker = await createWorker("spa+eng", 1, {
+        logger: (message) => {
+          if (!isRunActive()) return;
+          if (
+            message &&
+            typeof message.progress === "number" &&
+            message.status !== "done"
+          ) {
+            const stage =
+              ((currentAngleIndex + message.progress) / currentAnglesLength) * 92;
+            setOcrProgress(Math.round(stage));
+          }
+        }
+      });
+      ocrWorkerRef.current = worker;
+      workerForRun = worker;
+
       const angles = isPdf ? [0] : [0, 90, 180, 270];
       let best = null;
+      const ocrCandidates = [];
 
       for (let i = 0; i < angles.length; i += 1) {
+        ensureRunActive();
         const angle = angles[i];
         const rotatedInput = rotateCanvas(baseCanvas, angle);
-        const result = await recognize(rotatedInput, "spa+eng", {
-          logger: (message) => {
-            if (
-              message &&
-              typeof message.progress === "number" &&
-              message.status !== "done"
-            ) {
-              const stage = ((i + message.progress) / angles.length) * 92;
-              setOcrProgress(Math.round(stage));
-            }
-          }
-        });
+        currentAngleIndex = i;
+        currentAnglesLength = angles.length;
+        const result = await worker.recognize(rotatedInput);
+        ensureRunActive();
 
         const words = result?.data?.words || [];
         const fullText = result?.data?.text || "";
         const values = extractFieldValuesFromWords(words, fullText);
         const confidence = result?.data?.confidence || 0;
         const score = scoreResult(values, confidence);
+        ocrCandidates.push({
+          angle,
+          confidence,
+          score,
+          fullText,
+          words,
+          values
+        });
 
         if (!best || score > best.score) {
           best = {
@@ -518,6 +803,80 @@ function Home() {
         hasNombres: false,
         hasApellidos: false
       };
+      const pooledText = ocrCandidates.map((item) => item.fullText || "").join("\n");
+      const pooledValues = extractFieldValuesFromWords([], pooledText);
+
+      ocrScratchRef.current = {
+        createdAt: Date.now(),
+        candidates: ocrCandidates.map((item) => ({
+          angle: item.angle,
+          score: item.score,
+          confidence: item.confidence,
+          identificacion: item.values?.identificacion || "",
+          fullName: item.values?.fullName || ""
+        })),
+        pooled: pooledValues
+      };
+
+      const idCounts = new Map();
+      ocrCandidates.forEach((item) => {
+        const normalizedId = normalizeCedulaCandidate(item.values?.identificacion || "");
+        if (!normalizedId) return;
+        idCounts.set(normalizedId, (idCounts.get(normalizedId) || 0) + 1);
+      });
+      const idByConsensus = [...idCounts.entries()].sort((a, b) => b[1] - a[1])[0]?.[0] || "";
+      const finalIdentificacion =
+        normalizeCedulaCandidate(pooledValues.identificacion || "") ||
+        idByConsensus ||
+        normalizeCedulaCandidate(bestValues.identificacion || "");
+
+      const tokenFreq = new Map();
+      ocrCandidates.forEach((item) => {
+        getLabelNameTokens(item.fullText || "").forEach((token) => {
+          tokenFreq.set(token, (tokenFreq.get(token) || 0) + 1);
+        });
+      });
+
+      const rawNameCandidates = [
+        { value: pooledValues.fullName, source: "pooled", boost: 0 },
+        ...ocrCandidates.map((item, idx) => ({
+          value: item.values?.fullName || "",
+          source: idx === 0 ? "angle0" : "angle",
+          boost: idx === 0 ? 0.2 : 0
+        })),
+        { value: bestValues.fullName, source: "best", boost: 1.2 }
+      ];
+
+      const uniqueCandidateMap = new Map();
+      rawNameCandidates.forEach((item) => {
+        const cleaned = cleanDetectedValue(item.value || "", { allowDigits: false });
+        if (!isStrongFullNameCandidate(cleaned)) return;
+        if (!uniqueCandidateMap.has(cleaned)) {
+          uniqueCandidateMap.set(cleaned, { ...item, value: cleaned });
+        } else {
+          const prev = uniqueCandidateMap.get(cleaned);
+          prev.boost += item.boost;
+          uniqueCandidateMap.set(cleaned, prev);
+        }
+      });
+
+      const suspiciousWords =
+        /\b(SOLTERA|SOLTERO|VENEZOLANO|REPUBLICA|BOLIVARIANA|IDENTIDAD|CEDULA|DIRECTOR)\b/;
+      const scoreNameCandidate = (candidate) => {
+        const tokens = candidate.value.split(" ").filter(Boolean);
+        let score = candidate.boost;
+        tokens.forEach((token) => {
+          score += (tokenFreq.get(token) || 0) * 1.3;
+        });
+        if (tokens.length >= 4) score += 1;
+        if (suspiciousWords.test(candidate.value)) score -= 5;
+        return score;
+      };
+
+      const finalFullName =
+        [...uniqueCandidateMap.values()]
+          .sort((a, b) => scoreNameCandidate(b) - scoreNameCandidate(a))[0]
+          ?.value || "";
 
       const bestPreviewDataUrl =
         best?.canvas?.toDataURL("image/png") || previewDataUrl;
@@ -526,23 +885,29 @@ function Home() {
         bestPreviewDataUrl,
         regions
       );
+      ensureRunActive();
 
       setOcrProgress(96);
       setIdImageDataUrl(highlightedDataUrl || bestPreviewDataUrl);
 
-      if (bestValues.identificacion) {
-        setIdentificationNumber(bestValues.identificacion);
+      if (finalIdentificacion) {
+        setIdentificationNumber(finalIdentificacion);
       }
-      if (bestValues.fullName) {
-        setFullName(bestValues.fullName);
+      if (finalFullName) {
+        setFullName(finalFullName);
       }
 
       setOcrDetectedFields({
-        identificacion: Boolean(regions.identificacion || bestValues.identificacion),
-        nombres: Boolean(regions.nombres || bestValues.hasNombres),
-        apellidos: Boolean(regions.apellidos || bestValues.hasApellidos)
+        identificacion: Boolean(
+          regions.identificacion || finalIdentificacion || bestValues.identificacion
+        ),
+        nombres: Boolean(regions.nombres || finalFullName || bestValues.hasNombres),
+        apellidos: Boolean(regions.apellidos || finalFullName || bestValues.hasApellidos)
       });
     } catch (error) {
+      if (error?.message === "OCR_CANCELLED") {
+        return;
+      }
       console.error("Error al ejecutar OCR", error);
       setOcrError("No se pudo leer la cédula. Intenta con una imagen más clara.");
       setOcrDetectedFields({
@@ -551,8 +916,21 @@ function Home() {
         apellidos: false
       });
     } finally {
-      setOcrProgress(100);
-      setIsOcrRunning(false);
+      if (workerForRun) {
+        if (ocrWorkerRef.current === workerForRun) {
+          ocrWorkerRef.current = null;
+        }
+        try {
+          await workerForRun.terminate();
+        } catch (terminateError) {
+          console.error("No se pudo terminar worker OCR", terminateError);
+        }
+      }
+
+      if (isRunActive()) {
+        setOcrProgress(100);
+        setIsOcrRunning(false);
+      }
     }
   };
 
@@ -563,7 +941,20 @@ function Home() {
     await runCedulaOcr(file);
   };
 
-  const clearIdAttachment = () => {
+  const clearIdAttachment = async () => {
+    ocrRunIdRef.current += 1;
+    ocrScratchRef.current = null;
+    setIsOcrRunning(false);
+    const worker = ocrWorkerRef.current;
+    if (worker) {
+      ocrWorkerRef.current = null;
+      try {
+        await worker.terminate();
+      } catch (error) {
+        console.error("No se pudo detener OCR", error);
+      }
+    }
+
     setIdImageDataUrl("");
     setIdFileName("");
     setOcrError("");
@@ -583,20 +974,45 @@ function Home() {
 
   const handleSubmit = async (event) => {
     event.preventDefault();
+    const payload = {
+      nombreCompleto: fullName || "Asegurado sin nombre",
+      numeroCedula: identificationNumber || "",
+      email: email || ""
+    };
+
     try {
-      await fetch(`${apiBaseUrl.replace(/\/+$/, "")}/dana-contact`, {
+      const lambdaResponse = await fetch(danaConversationLambdaUrl, {
         method: "POST",
         headers: {
           "Content-Type": "application/json"
         },
-        body: JSON.stringify({
-          name: fullName || "Asegurado sin nombre",
-          email,
-          photoDataUrl
-        })
+        body: JSON.stringify(payload)
       });
+
+      if (!lambdaResponse.ok) {
+        const lambdaText = await lambdaResponse.text().catch(() => "");
+        throw new Error(
+          lambdaText ||
+            `Lambda respondió ${lambdaResponse.status} ${lambdaResponse.statusText}`
+        );
+      }
     } catch (error) {
-      console.error("Error al guardar contacto en Dana", error);
+      console.error("Error al activar conversación vía Lambda", error);
+      try {
+        await fetch(`${apiBaseUrl.replace(/\/+$/, "")}/dana-contact`, {
+          method: "POST",
+          headers: {
+            "Content-Type": "application/json"
+          },
+          body: JSON.stringify({
+            name: payload.nombreCompleto,
+            email: payload.email,
+            photoDataUrl
+          })
+        });
+      } catch (fallbackError) {
+        console.error("Error en fallback /dana-contact", fallbackError);
+      }
     }
     setIsPreview(true);
   };
@@ -767,17 +1183,11 @@ function Home() {
                     Foto del asegurado (opcional)
                   </p>
                   <p className="text-xs text-[#5f6f8f] mb-3">
-                    Puedes activar la cámara para capturar una foto y previsualizar cómo se verá en el carnet.
+                    Puedes activar la cámara o subir una imagen para el carnet.
                   </p>
                   <div className="space-y-3">
-                    <div className="w-full h-40 rounded-[8px] border border-[#cfdcf8] bg-[#edf3ff] flex items-center justify-center overflow-hidden">
-                      {photoDataUrl ? (
-                        <img
-                          src={photoDataUrl}
-                          alt="Foto capturada"
-                          className="w-full h-full object-cover"
-                        />
-                      ) : (
+                    <div className="mx-auto w-52 h-72 rounded-[10px] border border-[#cfdcf8] bg-[#edf3ff] flex items-center justify-center overflow-hidden">
+                      {cameraOn ? (
                         <video
                           ref={videoRef}
                           className="w-full h-full object-cover"
@@ -785,8 +1195,25 @@ function Home() {
                           playsInline
                           muted
                         />
+                      ) : photoDataUrl ? (
+                        <img
+                          src={photoDataUrl}
+                          alt="Foto capturada"
+                          className="w-full h-full object-cover"
+                        />
+                      ) : (
+                        <span className="text-xs text-[#5f6f8f] px-4 text-center">
+                          Sin foto seleccionada
+                        </span>
                       )}
                     </div>
+                    <input
+                      ref={photoFileInputRef}
+                      type="file"
+                      accept="image/*"
+                      onChange={handlePhotoFileChange}
+                      className="hidden"
+                    />
                     <div className="flex flex-wrap items-center justify-center gap-2">
                       {!cameraOn && (
                         <button
@@ -795,6 +1222,15 @@ function Home() {
                           className={secondaryButtonClass}
                         >
                           Activar cámara
+                        </button>
+                      )}
+                      {!cameraOn && (
+                        <button
+                          type="button"
+                          onClick={() => photoFileInputRef.current?.click()}
+                          className={secondaryButtonClass}
+                        >
+                          Subir foto
                         </button>
                       )}
                       {cameraOn && (
@@ -820,6 +1256,9 @@ function Home() {
                           type="button"
                           onClick={() => {
                             setPhotoDataUrl("");
+                            if (photoFileInputRef.current) {
+                              photoFileInputRef.current.value = "";
+                            }
                             if (typeof window !== "undefined") {
                               window.localStorage.removeItem("walletPhoto");
                             }
@@ -849,6 +1288,8 @@ function Home() {
 
   const displayName = fullName || "Juan Pérez";
   const displayEmail = email || "juan.perez@ejemplo.com";
+  const displayId = identificationNumber || "V12345678";
+  const displayPolicy = `POL-${displayId.replace(/[^0-9]/g, "").slice(-6) || "000001"}`;
 
   const handleDownloadPkpass = async () => {
     try {
@@ -908,39 +1349,76 @@ function Home() {
           </p>
 
           <div className="mt-6">
-            <div className="mx-auto max-w-sm rounded-[20px] border border-[#cfdcf8] bg-white overflow-hidden shadow-[0_14px_32px_rgba(35,87,202,0.18)]">
-              <div className="h-20 bg-gradient-to-r from-[#334fb4] to-[#3864d9] flex items-center justify-center">
-                <p className="text-xs uppercase tracking-[0.16em] text-white font-bold">
-                  Carnet del asegurado
-                </p>
+            <div className="mx-auto max-w-[420px] rounded-[24px] overflow-hidden shadow-[0_20px_44px_rgba(35,87,202,0.24)] border border-[#b9ccfa] bg-gradient-to-br from-[#3559c4] via-[#2f4da9] to-[#25428f] text-white">
+              <div className="px-5 pt-5 pb-4 relative">
+                <div className="absolute inset-0 opacity-20 bg-[radial-gradient(circle_at_85%_20%,#ffffff_0,transparent_40%)]" />
+                <div className="relative flex items-start justify-between gap-4">
+                  <div>
+                    <p className="text-[10px] uppercase tracking-[0.22em] text-white/75">
+                      LBC Seguros
+                    </p>
+                    <p className="mt-1 text-lg font-bold leading-tight">
+                      Carnet del asegurado
+                    </p>
+                    <p className="text-[11px] text-white/80 mt-1">
+                      Seguros Digitales
+                    </p>
+                  </div>
+                  <div className="h-14 w-14 rounded-xl bg-white/12 border border-white/25 flex items-center justify-center text-[11px] font-semibold">
+                    LBC
+                  </div>
+                </div>
               </div>
-              <div className="px-4 pb-5 flex flex-col items-center text-center gap-3">
-                <div className="w-20 h-20 rounded-full overflow-hidden border-2 border-[#3864d9] bg-white -mt-8">
-                  <img
-                    src={
-                      photoDataUrl ||
-                      (typeof window !== "undefined" &&
-                      window.localStorage.getItem("walletPhoto")
-                        ? window.localStorage.getItem("walletPhoto")
-                        : "https://media.istockphoto.com/id/1389348844/es/foto/foto-de-estudio-de-una-hermosa-joven-sonriendo-mientras-est%C3%A1-de-pie-sobre-un-fondo-gris.jpg?s=612x612&w=0&k=20&c=kUufmNoTnDcRbyeHhU1wRiip-fNjTWP9owjHf75frFQ=")
-                    }
-                    alt="Foto del asegurado"
-                    className="w-full h-full object-cover"
-                  />
+
+              <div className="bg-white text-[#22355d] mx-4 rounded-[16px] border border-[#d7e3fd] p-4">
+                <div className="grid grid-cols-[1fr_92px] gap-3 items-start">
+                  <div className="min-w-0">
+                    <p className="text-[11px] uppercase tracking-[0.18em] text-[#5f6f8f]">
+                      Asegurado
+                    </p>
+                    <p className="text-[17px] font-bold leading-tight break-words">
+                      {displayName}
+                    </p>
+                    <div className="mt-3 space-y-1.5">
+                      <p className="text-xs">
+                        <span className="font-semibold">Cédula:</span> {displayId}
+                      </p>
+                      <p className="text-xs">
+                        <span className="font-semibold">Póliza:</span> {displayPolicy}
+                      </p>
+                      <p className="text-xs break-all">
+                        <span className="font-semibold">Email:</span> {displayEmail}
+                      </p>
+                    </div>
+                  </div>
+
+                  <div className="h-[110px] w-[92px] rounded-[12px] overflow-hidden border border-[#cfdcf8] bg-[#edf3ff]">
+                    <img
+                      src={
+                        photoDataUrl ||
+                        (typeof window !== "undefined" &&
+                        window.localStorage.getItem("walletPhoto")
+                          ? window.localStorage.getItem("walletPhoto")
+                          : "https://media.istockphoto.com/id/1389348844/es/foto/foto-de-estudio-de-una-hermosa-joven-sonriendo-mientras-est%C3%A1-de-pie-sobre-un-fondo-gris.jpg?s=612x612&w=0&k=20&c=kUufmNoTnDcRbyeHhU1wRiip-fNjTWP9owjHf75frFQ=")
+                      }
+                      alt="Foto del asegurado"
+                      className="w-full h-full object-cover"
+                    />
+                  </div>
                 </div>
-                <div>
-                  <p className="text-lg font-bold text-[#22355d]">
-                    {displayName}
+
+                <div className="mt-4 rounded-[12px] border border-[#d3def9] bg-[#f5f8ff] px-3 py-2">
+                  <p className="text-[10px] uppercase tracking-[0.18em] text-[#5f6f8f]">
+                    Documento
                   </p>
-                  <p className="text-xs text-[#5f6f8f]">
-                    {displayEmail}
+                  <p className="text-xs font-semibold text-[#2d468f]">
+                    Carnet digital de asegurado
                   </p>
                 </div>
-                <div className="mt-3 w-20 h-20 border border-[#ccd9f7] rounded-[8px] bg-[#edf3ff] flex items-center justify-center">
-                  <span className="text-[10px] text-[#5f6f8f] tracking-widest">
-                    QR
-                  </span>
-                </div>
+              </div>
+
+              <div className="px-5 py-3 text-[10px] tracking-[0.14em] uppercase text-white/75">
+                Documento digital de asegurado
               </div>
             </div>
           </div>
