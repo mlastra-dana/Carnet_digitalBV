@@ -9,6 +9,7 @@ function Home({ amplifyOutputs }) {
   const [cameraOn, setCameraOn] = useState(false);
   const [isPreview, setIsPreview] = useState(false);
   const [submitError, setSubmitError] = useState("");
+  const [submitErrorDebug, setSubmitErrorDebug] = useState("");
   const [isSubmitting, setIsSubmitting] = useState(false);
 
   const videoRef = useRef(null);
@@ -138,6 +139,8 @@ function Home({ amplifyOutputs }) {
     }
     return "http://localhost:3001";
   }, [amplifyOutputs]);
+  const danaConversationLambdaUrl =
+    import.meta.env.VITE_DANA_CONVERSATION_LAMBDA_URL || "";
 
   const inputClass =
     "w-full rounded-[8px] border border-[#8a8a8a]/70 px-3 py-2 text-sm text-[#1d2b4f] bg-white focus:outline-none focus:ring-2 focus:ring-[#3864d9] focus:border-[#3864d9]";
@@ -181,6 +184,7 @@ function Home({ amplifyOutputs }) {
   const handleSubmit = async (event) => {
     event.preventDefault();
     setSubmitError("");
+    setSubmitErrorDebug("");
     setIsSubmitting(true);
     const mergedFullName = `${firstNames} ${lastNames}`.replace(/\s+/g, " ").trim();
     const payload = {
@@ -198,8 +202,14 @@ function Home({ amplifyOutputs }) {
         photo
       });
 
+      if (!danaConversationLambdaUrl) {
+        throw new Error(
+          "Falta VITE_DANA_CONVERSATION_LAMBDA_URL en la configuración del frontend."
+        );
+      }
+
       const lambdaResponse = await fetch(
-        `${apiBaseUrl.replace(/\/+$/, "")}/dana/conversation`,
+        danaConversationLambdaUrl,
         {
           method: "POST",
           headers: {
@@ -227,6 +237,7 @@ function Home({ amplifyOutputs }) {
     } catch (error) {
       console.error("Error al enviar pkpass al backend Lambda", error);
       setSubmitError("No se pudo subir la información a Dana. Intenta nuevamente.");
+      setSubmitErrorDebug(error?.message || "Sin detalle adicional.");
     } finally {
       setIsSubmitting(false);
       setIsPreview(true);
@@ -410,7 +421,14 @@ function Home({ amplifyOutputs }) {
                     Acceder a wallet
                   </button>
                   {submitError ? (
-                    <p className="mt-2 text-sm text-[#b42318]">{submitError}</p>
+                    <div className="mt-2">
+                      <p className="text-sm text-[#b42318]">{submitError}</p>
+                      {submitErrorDebug ? (
+                        <p className="mt-1 text-xs text-[#8a8a8a] break-words">
+                          Debug: {submitErrorDebug}
+                        </p>
+                      ) : null}
+                    </div>
                   ) : null}
                 </div>
               </form>
@@ -477,7 +495,14 @@ function Home({ amplifyOutputs }) {
           <h1 className="text-2xl font-bold text-[#22355d]">Vista previa del carnet</h1>
           <p className="text-sm text-[#5f6f8f] mt-1">Así se verá el carnet digital del asegurado.</p>
           {submitError ? (
-            <p className="mt-3 text-sm text-[#b42318]">{submitError}</p>
+            <div className="mt-3">
+              <p className="text-sm text-[#b42318]">{submitError}</p>
+              {submitErrorDebug ? (
+                <p className="mt-1 text-xs text-[#8a8a8a] break-words">
+                  Debug: {submitErrorDebug}
+                </p>
+              ) : null}
+            </div>
           ) : null}
 
           <div className="mt-6">
