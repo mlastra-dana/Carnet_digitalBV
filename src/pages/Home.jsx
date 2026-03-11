@@ -9,11 +9,18 @@ function Home({ amplifyOutputs }) {
   const [photoDataUrl, setPhotoDataUrl] = useState("");
   const [cameraOn, setCameraOn] = useState(false);
   const [isPreview, setIsPreview] = useState(false);
+  const [isReadingId, setIsReadingId] = useState(false);
+  const [idReadError, setIdReadError] = useState("");
+  const [idReadSuccess, setIdReadSuccess] = useState("");
+  const [idReadDebug, setIdReadDebug] = useState("");
+  const [idFileName, setIdFileName] = useState("");
+  const [ocrStatus, setOcrStatus] = useState("");
 
   const videoRef = useRef(null);
   const canvasRef = useRef(null);
   const streamRef = useRef(null);
   const photoFileInputRef = useRef(null);
+  const idFileInputRef = useRef(null);
 
   useEffect(() => {
     if (typeof window !== "undefined") {
@@ -145,6 +152,290 @@ function Home({ amplifyOutputs }) {
   const secondaryButtonClass =
     "px-3 py-2 text-xs rounded-[20px] border border-[#3864d9] bg-white hover:bg-[#ecf2ff] text-[#3864d9] font-semibold";
 
+  const normalizeNameText = (value) =>
+    (value || "")
+      .replace(/[^A-Za-zÀ-ÿ\s]/g, " ")
+      .replace(/\s+/g, " ")
+      .trim();
+
+  const extractValueByLabel = (lines, labels) => {
+    for (let index = 0; index < lines.length; index += 1) {
+      const line = lines[index];
+      const lineUpper = line.toUpperCase();
+      const matchedLabel = labels.find((label) => lineUpper.includes(label));
+      if (!matchedLabel) continue;
+
+      const inline = line
+        .replace(new RegExp(`.*${matchedLabel}\\s*[:\\-]?\\s*`, "i"), "")
+        .trim();
+      if (inline) return inline;
+
+      const nextLine = (lines[index + 1] || "").trim();
+      if (nextLine) return nextLine;
+    }
+    return "";
+  };
+
+  const parseIdCardData = (ocrText) => {
+    const lines = (ocrText || "")
+      .split("\n")
+      .map((line) => line.replace(/\s+/g, " ").trim())
+      .filter(Boolean);
+
+    const cleanDetectedField = (value, maxWords = 4) => {
+      const cutByDelimiter = (value || "").split(/[|><]/)[0] || "";
+      const cleaned = normalizeNameText(cutByDelimiter).toUpperCase();
+      const noiseWords = new Set([
+        "REPUBLICA",
+        "BOLIVARIANA",
+        "VENEZUELA",
+        "CEDULA",
+        "IDENTIDAD",
+        "DIRECTOR",
+        "NACIMIENTO",
+        "EDO",
+        "CIVIL",
+        "FIRMA",
+        "TITULAR",
+        "VENEZOLANO",
+        "EXPEDICION",
+        "VENCIMIENTO",
+        "NOMBRES",
+        "APELLIDOS",
+        "NOMBRE",
+        "APELLIDO",
+        "DS",
+        "DE"
+      ]);
+      const filtered = cleaned
+        .split(" ")
+        .filter((word) => word && !noiseWords.has(word))
+        .join(" ")
+        .trim();
+
+      const stopTokens = [" DIRECTOR", " FIRMA", " TITULAR", " NACIMIENTO", " CIVIL"];
+      let truncated = filtered;
+      stopTokens.forEach((token) => {
+        const idx = truncated.indexOf(token);
+        if (idx > 0) truncated = truncated.slice(0, idx).trim();
+      });
+
+      const looksLikeNombresPrefix = (word) => {
+        const compact = (word || "").replace(/[^A-Z]/g, "");
+        if (compact.startsWith("NOMBRE")) return true;
+        if (compact.startsWith("NOMBRES")) return true;
+        // Variantes OCR comunes de "NOMBRES" (ej: NOUERES, NOBRES)
+        return /^N[O0][A-Z]{2,8}(ES|S)$/.test(compact);
+      };
+
+      const words = truncated
+        .split(" ")
+        .filter(Boolean)
+        .filter((word, index) => !(index === 0 && looksLikeNombresPrefix(word)));
+      return words.slice(0, maxWords).join(" ").trim();
+    };
+
+    const extractLabeledField = (field) => {
+      const labelRegex =
+        field === "APELLIDOS"
+          ? /APE[L1I]{1,2}ID[O0]S?\s*[:\-]?\s*(.+)$/i
+          : /N[O0]MBR[E3]S?\s*[:\-]?\s*(.+)$/i;
+      const maxWords = field === "APELLIDOS" ? 2 : 3;
+
+      for (let i = 0; i < lines.length; i += 1) {
+        const line = lines[i];
+        const match = line.match(labelRegex);
+        if (match?.[1]) {
+          const cleaned = cleanDetectedField(match[1], maxWords);
+          if (cleaned) return cleaned;
+        }
+
+        const upperLine = line.toUpperCase();
+        const hasLabel =
+          field === "APELLIDOS"
+            ? upperLine.includes("APELLIDOS") || upperLine.includes("APELI")
+            : upperLine.includes("NOMBRES") || upperLine.includes("NOMBRE");
+        if (hasLabel) {
+          const nextClean = cleanDetectedField(lines[i + 1] || "", maxWords);
+          if (nextClean) return nextClean;
+        }
+      }
+      return "";
+    };
+
+    let lastNamesValue = extractLabeledField("APELLIDOS");
+    let firstNamesValue = extractLabeledField("NOMBRES");
+
+    if (!firstNamesValue || !lastNamesValue) {
+      const candidateLines = lines
+        .map((line) => cleanDetectedField(line, 3))
+        .filter((line) => line.split(" ").length >= 2);
+      if (!lastNamesValue && candidateLines[0]) {
+        lastNamesValue = candidateLines[0].split(" ").slice(0, 2).join(" ");
+      }
+      if (!firstNamesValue && candidateLines[1]) {
+        firstNamesValue = candidateLines[1];
+      }
+    }
+
+    const compactText = lines.join(" ");
+    const cedulaWithPrefixMatch =
+      compactText.match(/([VE])\s*([0-9]{1,2}(?:[.\s][0-9]{3}){1,2})(?:[.\s]+[0-9]{2,3})?/i) ||
+      compactText.match(/([VE])\s*([0-9]{6,9})(?:\s+[0-9]{2,3})?/i);
+    const fallbackCedulaMatch = compactText.match(/\b([0-9]{6,9})\b/);
+    const documentPrefix = (cedulaWithPrefixMatch?.[1] || "V").toUpperCase();
+    const documentDigits = (
+      cedulaWithPrefixMatch?.[2] ||
+      fallbackCedulaMatch?.[1] ||
+      ""
+    ).replace(/\D/g, "");
+    const documentIdValue = documentDigits
+      ? `${documentPrefix}${documentDigits}`
+      : "";
+
+    return {
+      firstNamesValue,
+      lastNamesValue,
+      documentIdValue
+    };
+  };
+
+  const canvasToBlob = (canvas, type = "image/png") =>
+    new Promise((resolve, reject) => {
+      canvas.toBlob((blob) => {
+        if (blob) resolve(blob);
+        else reject(new Error("No se pudo convertir el PDF a imagen para OCR."));
+      }, type);
+    });
+
+  const getOcrInputFromFile = async (file) => {
+    const isPdf =
+      file?.type === "application/pdf" || file?.name?.toLowerCase().endsWith(".pdf");
+
+    if (!isPdf) {
+      return { input: file, sourceLabel: "imagen" };
+    }
+
+    const pdfjs = await import("pdfjs-dist/legacy/build/pdf.mjs");
+    if (pdfjs?.GlobalWorkerOptions) {
+      pdfjs.GlobalWorkerOptions.workerSrc = new URL(
+        "pdfjs-dist/legacy/build/pdf.worker.min.mjs",
+        import.meta.url
+      ).toString();
+    }
+
+    const pdfBuffer = await file.arrayBuffer();
+    const loadingTask = pdfjs.getDocument({ data: pdfBuffer });
+    const pdf = await loadingTask.promise;
+    const page = await pdf.getPage(1);
+    const viewport = page.getViewport({ scale: 2 });
+    const canvas = document.createElement("canvas");
+    const context = canvas.getContext("2d");
+
+    if (!context) {
+      throw new Error("No se pudo renderizar el PDF para OCR.");
+    }
+
+    canvas.width = Math.floor(viewport.width);
+    canvas.height = Math.floor(viewport.height);
+    await page.render({ canvasContext: context, viewport }).promise;
+    const renderedBlob = await canvasToBlob(canvas);
+
+    return { input: renderedBlob, sourceLabel: "pdf (página 1)" };
+  };
+
+  const handleIdFileChange = async (event) => {
+    const file = event.target.files?.[0];
+    if (!file) return;
+
+    setIdReadError("");
+    setIdReadSuccess("");
+    setIdReadDebug("");
+    setOcrStatus("Preparando análisis del documento...");
+    setIdFileName(file.name || "");
+    setIsReadingId(true);
+
+    try {
+      const tesseractModule = await import("tesseract.js");
+      const recognize =
+        tesseractModule?.recognize || tesseractModule?.default?.recognize;
+
+      if (!recognize) {
+        throw new Error("No se pudo inicializar OCR en el navegador.");
+      }
+
+      const { input: ocrInput, sourceLabel } = await getOcrInputFromFile(file);
+      const toSpanishStatus = (status) => {
+        const normalized = (status || "").toLowerCase();
+        if (normalized.includes("loading")) return "Cargando motor OCR...";
+        if (normalized.includes("initial")) return "Inicializando análisis...";
+        if (normalized.includes("recogn")) return "Analizando documento...";
+        if (normalized.includes("resolv")) return "Procesando resultados...";
+        return "Analizando documento...";
+      };
+
+      const result = await recognize(ocrInput, "spa", {
+        logger: (message) => {
+          const nextStatus = (message?.status || "").toString();
+          if (nextStatus) setOcrStatus(toSpanishStatus(nextStatus));
+        }
+      });
+      const ocrText = result?.data?.text || "";
+      if (!ocrText.trim()) {
+        throw new Error("OCR no detectó texto legible. Intenta con una foto más nítida.");
+      }
+
+      const debugSample = ocrText
+        .split("\n")
+        .map((line) => line.trim())
+        .filter(Boolean)
+        .slice(0, 4)
+        .join(" | ");
+      setIdReadDebug(`OCR ${sourceLabel} (español): ${debugSample}`);
+
+      const { firstNamesValue, lastNamesValue, documentIdValue } = parseIdCardData(
+        ocrText
+      );
+
+      if (!firstNamesValue && !lastNamesValue && !documentIdValue) {
+        throw new Error("No se pudieron detectar nombres o apellidos en la cédula.");
+      }
+
+      if (firstNamesValue) setFirstNames(firstNamesValue);
+      if (lastNamesValue) setLastNames(lastNamesValue);
+      if (documentIdValue) setIdentificationNumber(documentIdValue);
+
+      if (firstNamesValue && lastNamesValue) {
+        setIdReadSuccess("Datos detectados y cargados desde la cédula.");
+      } else {
+        setIdReadSuccess("Lectura parcial: revisa y completa los campos faltantes.");
+      }
+    } catch (error) {
+      console.error("Error leyendo cédula con OCR", error);
+      setIdReadError(error?.message || "No se pudo procesar la imagen de cédula.");
+    } finally {
+      setOcrStatus("");
+      setIsReadingId(false);
+      if (idFileInputRef.current) {
+        idFileInputRef.current.value = "";
+      }
+    }
+  };
+
+  const clearAttachedIdFile = () => {
+    setIdFileName("");
+    setIdReadError("");
+    setIdReadSuccess("");
+    setIdReadDebug("");
+    setIdentificationNumber("");
+    setFirstNames("");
+    setLastNames("");
+    setOcrStatus("");
+    if (idFileInputRef.current) {
+      idFileInputRef.current.value = "";
+    }
+  };
+
   const handleSubmit = (event) => {
     event.preventDefault();
     setIsPreview(true);
@@ -155,11 +446,11 @@ function Home({ amplifyOutputs }) {
       "https://cdn.shopify.com/s/files/1/0647/3190/6239/files/LBC_e08bc3c6-2217-4387-9ce3-b1a03ce369aa_250x.png?v=1713204930";
 
     return (
-      <div className="min-h-screen bg-gradient-to-b from-[#3c4c69] to-[#33435f] text-[#1c355c] px-4 py-8 sm:py-12">
+      <div className="min-h-screen bg-gradient-to-br from-[#3864d9] via-[#334fb4] to-[#0064dc] text-[#1c355c] px-4 py-8 sm:py-12">
         <div className="mx-auto w-full max-w-6xl">
           <div className="rounded-[22px] border border-white/30 bg-white shadow-[0_24px_58px_rgba(11,63,126,0.34)] overflow-hidden">
             <div className="grid lg:grid-cols-[1fr_1fr]">
-              <aside className="relative bg-gradient-to-br from-[#3c4c69] via-[#33435f] to-[#2e3c55] p-8 sm:p-10 text-white overflow-hidden">
+              <aside className="relative bg-gradient-to-br from-[#3864d9] via-[#334fb4] to-[#0064dc] p-8 sm:p-10 text-white overflow-hidden">
                 <div className="absolute inset-0 opacity-25 bg-[radial-gradient(circle_at_12%_20%,#ffffff_0,transparent_42%)]" />
                 <div className="relative">
                   <img src={logoUrl} alt="LBC Seguros" className="h-14 w-auto object-contain" />
@@ -174,29 +465,6 @@ function Home({ amplifyOutputs }) {
                   </p>
                 </div>
 
-                <div className="relative mt-8 rounded-[22px] border border-white/25 bg-white/10 p-5 shadow-[0_18px_36px_rgba(4,31,74,0.28)] backdrop-blur-[2px]">
-                  <div className="flex items-center justify-between gap-4">
-                    <p className="text-lg font-bold tracking-[0.06em]">LBC SEGUROS</p>
-                    <span className="rounded-full bg-[#12a150] px-3 py-1 text-xs font-semibold text-white">
-                      Activo
-                    </span>
-                  </div>
-                  <div className="mt-4 h-px bg-white/30" />
-                  <div className="mt-4 grid grid-cols-2 gap-3 text-sm">
-                    <div className="rounded-xl border border-white/25 bg-white/10 p-3">
-                      <p className="text-white/70">Cobertura</p>
-                      <p className="mt-1 font-semibold">Salud Integral</p>
-                    </div>
-                    <div className="rounded-xl border border-white/25 bg-white/10 p-3">
-                      <p className="text-white/70">Emisión</p>
-                      <p className="mt-1 font-semibold">100% Digital</p>
-                    </div>
-                    <div className="rounded-xl border border-white/25 bg-white/10 p-3 col-span-2">
-                      <p className="text-white/70">Beneficio</p>
-                      <p className="mt-1 font-semibold">Carnet wallet inmediato</p>
-                    </div>
-                  </div>
-                </div>
               </aside>
 
               <section className="p-8 sm:p-10 flex items-center">
@@ -252,6 +520,71 @@ function Home({ amplifyOutputs }) {
 
             <div className="px-5 py-7 sm:px-8 sm:py-9">
               <form onSubmit={handleSubmit} className="space-y-4 text-left">
+                <div className="rounded-[12px] border border-[#d9e3fb] bg-[#f6f9ff] p-3">
+                  <p className="text-sm font-semibold text-[#22355d]">
+                    Cargar documento de identidad
+                  </p>
+                  <p className="mt-1 text-xs text-[#5f6f8f]">
+                    Sube una imagen o PDF del documento de identidad para registrar los datos del titular.
+                  </p>
+                  <input
+                    ref={idFileInputRef}
+                    type="file"
+                    accept="image/*,application/pdf,.pdf"
+                    onChange={handleIdFileChange}
+                    className="hidden"
+                  />
+                  <div className="mt-2 flex items-center gap-2">
+                    <button
+                      type="button"
+                      onClick={() => idFileInputRef.current?.click()}
+                      disabled={isReadingId}
+                      className={secondaryButtonClass}
+                    >
+                      {isReadingId ? "Analizando documento..." : "Cargar documento"}
+                    </button>
+                    {idReadSuccess ? (
+                      <p className="text-xs text-[#0f8c46]">{idReadSuccess}</p>
+                    ) : null}
+                  </div>
+                  {isReadingId ? (
+                    <div className="mt-2 rounded-[10px] border border-[#d4e1fb] bg-white px-3 py-2">
+                      <div className="flex items-center gap-2 text-xs text-[#4b628d]">
+                        <span className="inline-flex h-6 w-6 items-center justify-center rounded-full bg-[#eef4ff] text-sm animate-pulse">
+                          ⏳
+                        </span>
+                        <span>{ocrStatus || "Analizando documento..."}</span>
+                      </div>
+                    </div>
+                  ) : null}
+                  {idFileName ? (
+                    <div className="mt-2 inline-flex items-center gap-2 rounded-full border border-[#bfd3f7] bg-white px-3 py-1">
+                      <span className="max-w-[220px] truncate text-xs text-[#34517f]">
+                        {idFileName}
+                      </span>
+                      <button
+                        type="button"
+                        onClick={clearAttachedIdFile}
+                        className="h-5 w-5 rounded-full bg-[#ecf2ff] text-[#34517f] leading-none hover:bg-[#dce8ff]"
+                        aria-label="Quitar archivo adjunto"
+                      >
+                        ×
+                      </button>
+                    </div>
+                  ) : null}
+                  {idReadError ? (
+                    <p className="mt-2 text-xs text-[#b42318]">{idReadError}</p>
+                  ) : null}
+                  {idReadDebug ? (
+                    <details className="mt-2">
+                      <summary className="cursor-pointer select-none text-xs text-[#5f6f8f]">
+                        Ver detalle de análisis
+                      </summary>
+                      <p className="mt-1 text-xs text-[#5f6f8f] break-words">{idReadDebug}</p>
+                    </details>
+                  ) : null}
+                </div>
+
                 <div>
                   <label className="block text-sm font-semibold text-[#22355d] mb-1">
                     Número de cédula
