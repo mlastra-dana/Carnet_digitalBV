@@ -1,6 +1,7 @@
 import React, { useEffect, useMemo, useRef, useState } from "react";
 
 function Home({ amplifyOutputs }) {
+  const [isIntro, setIsIntro] = useState(true);
   const [firstNames, setFirstNames] = useState("");
   const [lastNames, setLastNames] = useState("");
   const [identificationNumber, setIdentificationNumber] = useState("");
@@ -8,9 +9,6 @@ function Home({ amplifyOutputs }) {
   const [photoDataUrl, setPhotoDataUrl] = useState("");
   const [cameraOn, setCameraOn] = useState(false);
   const [isPreview, setIsPreview] = useState(false);
-  const [submitError, setSubmitError] = useState("");
-  const [submitErrorDebug, setSubmitErrorDebug] = useState("");
-  const [isSubmitting, setIsSubmitting] = useState(false);
 
   const videoRef = useRef(null);
   const canvasRef = useRef(null);
@@ -139,110 +137,96 @@ function Home({ amplifyOutputs }) {
     }
     return "http://localhost:3001";
   }, [amplifyOutputs]);
-  const danaConversationLambdaUrl =
-    import.meta.env.VITE_DANA_CONVERSATION_LAMBDA_URL || "";
 
   const inputClass =
     "w-full rounded-[8px] border border-[#8a8a8a]/70 px-3 py-2 text-sm text-[#1d2b4f] bg-white focus:outline-none focus:ring-2 focus:ring-[#3864d9] focus:border-[#3864d9]";
   const primaryButtonClass =
-    "w-full px-8 py-3 rounded-[20px] bg-[#3864d9] hover:bg-[#2d56c8] active:bg-[#2448ab] text-white text-base font-bold shadow-sm transition-colors focus:outline-none focus:ring-2 focus:ring-[#3864d9] focus:ring-offset-2 focus:ring-offset-white";
+    "w-full px-8 py-3 rounded-[20px] bg-[#12a150] hover:bg-[#0f8c46] active:bg-[#0b7439] text-white text-base font-bold shadow-sm transition-colors focus:outline-none focus:ring-2 focus:ring-[#12a150] focus:ring-offset-2 focus:ring-offset-white";
   const secondaryButtonClass =
     "px-3 py-2 text-xs rounded-[20px] border border-[#3864d9] bg-white hover:bg-[#ecf2ff] text-[#3864d9] font-semibold";
 
-  const toBase64 = (arrayBuffer) => {
-    const bytes = new Uint8Array(arrayBuffer);
-    const chunkSize = 0x8000;
-    let binary = "";
-    for (let i = 0; i < bytes.length; i += chunkSize) {
-      const chunk = bytes.subarray(i, i + chunkSize);
-      binary += String.fromCharCode(...chunk);
-    }
-    return window.btoa(binary);
-  };
-
-  const buildPkpassBase64 = async ({ name, mail, photo }) => {
-    const response = await fetch(`${apiBaseUrl.replace(/\/+$/, "")}/pkpass`, {
-      method: "POST",
-      headers: {
-        "Content-Type": "application/json"
-      },
-      body: JSON.stringify({
-        name,
-        email: mail,
-        photoDataUrl: photo
-      })
-    });
-
-    if (!response.ok) {
-      throw new Error("No se pudo generar el archivo .pkpass");
-    }
-
-    const pkpassBuffer = await response.arrayBuffer();
-    return toBase64(pkpassBuffer);
-  };
-
-  const handleSubmit = async (event) => {
+  const handleSubmit = (event) => {
     event.preventDefault();
-    setSubmitError("");
-    setSubmitErrorDebug("");
-    setIsSubmitting(true);
-    const mergedFullName = `${firstNames} ${lastNames}`.replace(/\s+/g, " ").trim();
-    const payload = {
-      NOMBRECLIENTE: mergedFullName || "Asegurado sin nombre",
-      DOCUMENT_ID: identificationNumber || "",
-      EMAIL: email || ""
-    };
-
-    try {
-      const photo =
-        photoDataUrl || null;
-      const pkpassBase64 = await buildPkpassBase64({
-        name: payload.NOMBRECLIENTE,
-        mail: payload.EMAIL,
-        photo
-      });
-
-      if (!danaConversationLambdaUrl) {
-        throw new Error(
-          "Falta VITE_DANA_CONVERSATION_LAMBDA_URL en la configuración del frontend."
-        );
-      }
-
-      const lambdaResponse = await fetch(
-        danaConversationLambdaUrl,
-        {
-          method: "POST",
-          headers: {
-            "Content-Type": "application/json"
-          },
-          body: JSON.stringify({
-            ...payload,
-            PKPASS_FILE_BASE64: pkpassBase64
-          })
-        }
-      );
-
-      if (!lambdaResponse.ok) {
-        const lambdaText = await lambdaResponse.text().catch(() => "");
-        throw new Error(
-          lambdaText ||
-            `Lambda respondió ${lambdaResponse.status} ${lambdaResponse.statusText}`
-        );
-      }
-
-      const responseData = await lambdaResponse.json().catch(() => null);
-      if (!responseData?.ok) {
-        throw new Error(responseData?.message || "Respuesta inválida del backend.");
-      }
-    } catch (error) {
-      console.error("Error al enviar pkpass al backend Lambda", error);
-      setSubmitError("No se pudo subir la información a Dana. Intenta nuevamente.");
-      setSubmitErrorDebug(error?.message || "Sin detalle adicional.");
-    } finally {
-      setIsSubmitting(false);
-      setIsPreview(true);
-    }
+    setIsPreview(true);
   };
+
+  if (!isPreview && isIntro) {
+    const logoUrl =
+      "https://cdn.shopify.com/s/files/1/0647/3190/6239/files/LBC_e08bc3c6-2217-4387-9ce3-b1a03ce369aa_250x.png?v=1713204930";
+
+    return (
+      <div className="min-h-screen bg-gradient-to-b from-[#3c4c69] to-[#33435f] text-[#1c355c] px-4 py-8 sm:py-12">
+        <div className="mx-auto w-full max-w-6xl">
+          <div className="rounded-[22px] border border-white/30 bg-white shadow-[0_24px_58px_rgba(11,63,126,0.34)] overflow-hidden">
+            <div className="grid lg:grid-cols-[1fr_1fr]">
+              <aside className="relative bg-gradient-to-br from-[#3c4c69] via-[#33435f] to-[#2e3c55] p-8 sm:p-10 text-white overflow-hidden">
+                <div className="absolute inset-0 opacity-25 bg-[radial-gradient(circle_at_12%_20%,#ffffff_0,transparent_42%)]" />
+                <div className="relative">
+                  <img src={logoUrl} alt="LBC Seguros" className="h-14 w-auto object-contain" />
+                  <p className="mt-10 text-xs uppercase tracking-[0.2em] text-white/75">
+                    La Boliviana Ciacruz
+                  </p>
+                  <h1 className="mt-3 text-3xl sm:text-4xl font-bold leading-tight">
+                    LBC Seguros Digital
+                  </h1>
+                  <p className="mt-4 text-sm text-white/85 max-w-md">
+                    Tu seguro, siempre disponible. Genera y descarga tu carnet digital en minutos.
+                  </p>
+                </div>
+
+                <div className="relative mt-8 rounded-[22px] border border-white/25 bg-white/10 p-5 shadow-[0_18px_36px_rgba(4,31,74,0.28)] backdrop-blur-[2px]">
+                  <div className="flex items-center justify-between gap-4">
+                    <p className="text-lg font-bold tracking-[0.06em]">LBC SEGUROS</p>
+                    <span className="rounded-full bg-[#12a150] px-3 py-1 text-xs font-semibold text-white">
+                      Activo
+                    </span>
+                  </div>
+                  <div className="mt-4 h-px bg-white/30" />
+                  <div className="mt-4 grid grid-cols-2 gap-3 text-sm">
+                    <div className="rounded-xl border border-white/25 bg-white/10 p-3">
+                      <p className="text-white/70">Cobertura</p>
+                      <p className="mt-1 font-semibold">Salud Integral</p>
+                    </div>
+                    <div className="rounded-xl border border-white/25 bg-white/10 p-3">
+                      <p className="text-white/70">Emisión</p>
+                      <p className="mt-1 font-semibold">100% Digital</p>
+                    </div>
+                    <div className="rounded-xl border border-white/25 bg-white/10 p-3 col-span-2">
+                      <p className="text-white/70">Beneficio</p>
+                      <p className="mt-1 font-semibold">Carnet wallet inmediato</p>
+                    </div>
+                  </div>
+                </div>
+              </aside>
+
+              <section className="p-8 sm:p-10 flex items-center">
+                <div className="max-w-md">
+                  <p className="inline-block rounded-full border border-[#bdd7f6] bg-[#edf5ff] px-3 py-1 text-xs uppercase tracking-[0.14em] text-[#3a7db8] font-semibold">
+                    Portal de Asegurados
+                  </p>
+                  <h2 className="mt-4 text-4xl sm:text-5xl font-extrabold leading-[1.02] text-[#2d75b4]">
+                    Registro de carnet digital
+                  </h2>
+                  <p className="mt-4 text-lg text-[#334f77]">
+                    Completa tu registro para obtener tu carnet LBC en formato Wallet.
+                  </p>
+                  <div className="mt-8">
+                    <button
+                      type="button"
+                      onClick={() => setIsIntro(false)}
+                      className="inline-flex items-center rounded-[14px] bg-[#12a150] px-8 py-3 text-white text-lg font-bold shadow-[0_12px_24px_rgba(18,161,80,0.28)] hover:bg-[#0f8c46] active:bg-[#0b7439] transition-colors focus:outline-none focus:ring-2 focus:ring-[#12a150] focus:ring-offset-2"
+                    >
+                      Iniciar registro
+                    </button>
+                  </div>
+                </div>
+              </section>
+            </div>
+          </div>
+        </div>
+      </div>
+    );
+  }
 
   if (!isPreview) {
     const logoUrl =
@@ -417,19 +401,19 @@ function Home({ amplifyOutputs }) {
                 </div>
 
                 <div className="pt-2">
-                  <button type="submit" disabled={isSubmitting} className={primaryButtonClass}>
+                  <button type="submit" className={primaryButtonClass}>
                     Acceder a wallet
                   </button>
-                  {submitError ? (
-                    <div className="mt-2">
-                      <p className="text-sm text-[#b42318]">{submitError}</p>
-                      {submitErrorDebug ? (
-                        <p className="mt-1 text-xs text-[#8a8a8a] break-words">
-                          Debug: {submitErrorDebug}
-                        </p>
-                      ) : null}
-                    </div>
-                  ) : null}
+                  <button
+                    type="button"
+                    onClick={() => {
+                      stopCamera();
+                      setIsIntro(true);
+                    }}
+                    className="mt-3 w-full px-8 py-3 rounded-[20px] border border-[#3c4c69] bg-white hover:bg-[#eef3fb] text-[#3c4c69] text-base font-bold transition-colors focus:outline-none focus:ring-2 focus:ring-[#3c4c69] focus:ring-offset-2 focus:ring-offset-white"
+                  >
+                    Salir
+                  </button>
                 </div>
               </form>
             </div>
@@ -448,9 +432,7 @@ function Home({ amplifyOutputs }) {
   const handleDownloadPkpass = async () => {
     try {
       const photo =
-        typeof window !== "undefined"
-          ? window.localStorage.getItem("walletPhoto")
-          : null;
+        photoDataUrl || null;
 
       const response = await fetch(`${apiBaseUrl.replace(/\/+$/, "")}/pkpass`, {
         method: "POST",
@@ -494,17 +476,6 @@ function Home({ amplifyOutputs }) {
         <div className="p-6 sm:p-8 text-center">
           <h1 className="text-2xl font-bold text-[#22355d]">Vista previa del carnet</h1>
           <p className="text-sm text-[#5f6f8f] mt-1">Así se verá el carnet digital del asegurado.</p>
-          {submitError ? (
-            <div className="mt-3">
-              <p className="text-sm text-[#b42318]">{submitError}</p>
-              {submitErrorDebug ? (
-                <p className="mt-1 text-xs text-[#8a8a8a] break-words">
-                  Debug: {submitErrorDebug}
-                </p>
-              ) : null}
-            </div>
-          ) : null}
-
           <div className="mt-6">
             <div className="mx-auto max-w-[420px] rounded-[24px] overflow-hidden shadow-[0_20px_44px_rgba(35,87,202,0.24)] border border-[#b9ccfa] bg-gradient-to-br from-[#3559c4] via-[#2f4da9] to-[#25428f] text-white">
               <div className="px-5 pt-5 pb-4 relative">
@@ -567,7 +538,7 @@ function Home({ amplifyOutputs }) {
             <button
               type="button"
               onClick={handleDownloadPkpass}
-              className="inline-block min-w-64 px-8 py-3 rounded-[20px] bg-[#3864d9] hover:bg-[#2d56c8] active:bg-[#2448ab] text-white text-base font-bold shadow-sm transition-colors focus:outline-none focus:ring-2 focus:ring-[#3864d9] focus:ring-offset-2 focus:ring-offset-white"
+              className="inline-block min-w-64 px-8 py-3 rounded-[20px] bg-[#12a150] hover:bg-[#0f8c46] active:bg-[#0b7439] text-white text-base font-bold shadow-sm transition-colors focus:outline-none focus:ring-2 focus:ring-[#12a150] focus:ring-offset-2 focus:ring-offset-white"
             >
               Descargar carnet (.pkpass)
             </button>
@@ -580,7 +551,7 @@ function Home({ amplifyOutputs }) {
                 }}
                 className="text-sm text-[#3864d9] underline hover:text-[#2d56c8]"
               >
-                Volver a la pantalla principal
+                Volver al registro
               </button>
             </div>
           </div>

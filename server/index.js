@@ -146,60 +146,6 @@ async function createSignedPkpass({
     }
   }
 }
-async function sendContactToDana({ name, email, imageRef }) {
-  try {
-    const endpoint =
-      process.env.DANA_CONTACTS_URL ||
-      "https://ws.danaconnect.com/api/contacts/rest/webdb/table/PRUEBAASEGURADORAFO1";
-    const authBasic =
-      process.env.DANA_AUTH_BASIC ||
-      "Y2RlbGdhZG9AdmVudHVyZXN0YXJzOkNhbWlvMTIxMS0=";
-
-    const safe = (value) => (value || "").toString().replace(/"/g, '""');
-
-    const passLabel = "Carnet Asegurado";
-
-    const csvLine = `"${safe(name)}","${safe(email)}","${safe(
-      imageRef
-    )}","${safe(passLabel)}"\n`;
-
-    const formData = new FormData();
-    formData.append("delimiter", '"');
-    formData.append("encodingType", "UTF-8");
-    formData.append("includeHeaders", "false");
-    formData.append("operationType", "INSALL");
-    formData.append("separator", ",");
-    formData.append("strict", "true");
-    formData.append("fieldsCode", "NOMBRE;EMAIL;IMAGEN;TIPODEPASE");
-
-    const csvBlob = new Blob([csvLine], { type: "text/csv" });
-    formData.append("file", csvBlob, "contacto_sin_encabezado.csv");
-
-    const response = await fetch(endpoint, {
-      method: "POST",
-      headers: {
-        Accept: "application/json",
-        Authorization: `Basic ${authBasic}`
-      },
-      body: formData
-    });
-
-    if (!response.ok) {
-      console.error(
-        "Error al enviar contacto a Dana:",
-        response.status,
-        response.statusText
-      );
-      return;
-    }
-
-    const data = await response.json().catch(() => null);
-    console.log("Contacto enviado a Dana correctamente", data || "");
-  } catch (error) {
-    console.error("Error inesperado al enviar contacto a Dana:", error);
-  }
-}
-
 app.get("/ping", async (req, res) => {
   try {
     const lambdaResponse = await helloWorld(
@@ -214,49 +160,6 @@ app.get("/ping", async (req, res) => {
   } catch (error) {
     console.error("Error in /ping handler", error);
     res.status(500).json({ message: "Internal server error in local mock /ping" });
-  }
-});
-
-app.post("/dana/conversation", async (req, res) => {
-  try {
-    const lambdaResponse = await helloWorld(
-      {
-        rawPath: "/dana/conversation",
-        requestContext: { http: { method: "POST" } },
-        body: JSON.stringify(req.body || {})
-      },
-      { awsRequestId: "local-express-dana-conversation" },
-      null
-    );
-
-    const statusCode = lambdaResponse?.statusCode || 200;
-    const headers = lambdaResponse?.headers || {};
-    const body = lambdaResponse?.body || "";
-    res.status(statusCode).set(headers).send(body);
-  } catch (error) {
-    console.error("Error en /dana/conversation", error);
-    res.status(500).json({
-      ok: false,
-      message: "Internal server error in local mock /dana/conversation"
-    });
-  }
-});
-
-app.post("/dana-contact", async (req, res) => {
-  try {
-    const name = (req.body?.name || "").toString();
-    const email = (req.body?.email || "").toString();
-    const photoDataUrl = (req.body?.photoDataUrl || "").toString();
-
-    const imageRef =
-      photoDataUrl ||
-      "https://media.istockphoto.com/id/1389348844/es/foto/foto-de-estudio-de-una-hermosa-joven-sonriendo-mientras-est%C3%A1-de-pie-sobre-un-fondo-gris.jpg?s=612x612&w=0&k=20&c=kUufmNoTnDcRbyeHhU1wRiip-fNjTWP9owjHf75frFQ=";
-
-    await sendContactToDana({ name, email, imageRef });
-    res.json({ ok: true });
-  } catch (error) {
-    console.error("Error en /dana-contact", error);
-    res.status(500).json({ ok: false });
   }
 });
 

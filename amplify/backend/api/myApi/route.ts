@@ -7,12 +7,6 @@ export async function handler(
   if (event.rawPath === "/ping" && event.requestContext.http.method === "GET") {
     return helloWorldHandler(event, {} as any, () => {});
   }
-  if (
-    event.rawPath === "/dana/conversation" &&
-    event.requestContext.http.method === "POST"
-  ) {
-    return helloWorldHandler(event, {} as any, () => {});
-  }
 
   return {
     statusCode: 404,
