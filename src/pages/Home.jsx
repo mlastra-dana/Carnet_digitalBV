@@ -2,12 +2,14 @@ import React, { useEffect, useMemo, useRef, useState } from "react";
 
 function Home({ amplifyOutputs }) {
   const [isIntro, setIsIntro] = useState(true);
+  const [registrationStep, setRegistrationStep] = useState(1);
   const [firstNames, setFirstNames] = useState("");
   const [lastNames, setLastNames] = useState("");
   const [identificationNumber, setIdentificationNumber] = useState("");
   const [email, setEmail] = useState("");
   const [photoDataUrl, setPhotoDataUrl] = useState("");
-  const [cameraOn, setCameraOn] = useState(false);
+  const [portraitCameraOn, setPortraitCameraOn] = useState(false);
+  const [livenessCameraOn, setLivenessCameraOn] = useState(false);
   const [isPreview, setIsPreview] = useState(false);
   const [isReadingId, setIsReadingId] = useState(false);
   const [idReadError, setIdReadError] = useState("");
@@ -16,19 +18,23 @@ function Home({ amplifyOutputs }) {
   const [idFileName, setIdFileName] = useState("");
   const [idDocumentImageDataUrl, setIdDocumentImageDataUrl] = useState("");
   const [ocrStatus, setOcrStatus] = useState("");
-  const [isBiometricRunning, setIsBiometricRunning] = useState(false);
-  const [biometricStatus, setBiometricStatus] = useState("");
-  const [biometricError, setBiometricError] = useState("");
-  const [biometricResult, setBiometricResult] = useState("");
-  const [biometricScore, setBiometricScore] = useState(null);
+  const [isLivenessRunning, setIsLivenessRunning] = useState(false);
+  const [livenessApproved, setLivenessApproved] = useState(false);
+  const [livenessStatus, setLivenessStatus] = useState("");
+  const [livenessError, setLivenessError] = useState("");
+  const [livenessStepIndex, setLivenessStepIndex] = useState(0);
+  const [livenessPreviewDataUrl, setLivenessPreviewDataUrl] = useState("");
 
-  const videoRef = useRef(null);
-  const canvasRef = useRef(null);
-  const streamRef = useRef(null);
+  const portraitVideoRef = useRef(null);
+  const portraitCanvasRef = useRef(null);
+  const portraitStreamRef = useRef(null);
+  const livenessVideoRef = useRef(null);
+  const livenessCanvasRef = useRef(null);
+  const livenessStreamRef = useRef(null);
+  const faceDetectorRef = useRef(null);
   const photoFileInputRef = useRef(null);
   const idFileInputRef = useRef(null);
-  const faceApiRef = useRef(null);
-  const faceApiModelsLoadedRef = useRef(false);
+  const livenessFramesRef = useRef([]);
 
   useEffect(() => {
     if (typeof window !== "undefined") {
@@ -37,35 +43,66 @@ function Home({ amplifyOutputs }) {
   }, []);
 
   useEffect(() => {
-    if (!cameraOn) return;
-    const video = videoRef.current;
-    const stream = streamRef.current;
+    if (!portraitCameraOn) return;
+    const video = portraitVideoRef.current;
+    const stream = portraitStreamRef.current;
     if (!video || !stream) return;
 
     // eslint-disable-next-line no-param-reassign
     video.srcObject = stream;
     video.play().catch((error) => {
-      console.error("No se pudo reproducir la cámara", error);
+      console.error("No se pudo reproducir la cámara de retrato", error);
     });
-  }, [cameraOn]);
+  }, [portraitCameraOn]);
 
-  const stopCamera = () => {
-    const stream = streamRef.current;
+  useEffect(() => {
+    if (!livenessCameraOn) return;
+    const video = livenessVideoRef.current;
+    const stream = livenessStreamRef.current;
+    if (!video || !stream) return;
+
+    // eslint-disable-next-line no-param-reassign
+    video.srcObject = stream;
+    video.play().catch((error) => {
+      console.error("No se pudo reproducir la cámara de prueba de vida", error);
+    });
+  }, [livenessCameraOn]);
+
+  const stopPortraitCamera = () => {
+    const stream = portraitStreamRef.current;
     if (stream) {
       stream.getTracks().forEach((track) => track.stop());
-      streamRef.current = null;
+      portraitStreamRef.current = null;
     }
-    if (videoRef.current) {
+    if (portraitVideoRef.current) {
       // eslint-disable-next-line no-param-reassign
-      videoRef.current.srcObject = null;
+      portraitVideoRef.current.srcObject = null;
     }
-    setCameraOn(false);
+    setPortraitCameraOn(false);
   };
 
-  const startCamera = async () => {
+  const stopLivenessCamera = () => {
+    const stream = livenessStreamRef.current;
+    if (stream) {
+      stream.getTracks().forEach((track) => track.stop());
+      livenessStreamRef.current = null;
+    }
+    if (livenessVideoRef.current) {
+      // eslint-disable-next-line no-param-reassign
+      livenessVideoRef.current.srcObject = null;
+    }
+    setLivenessCameraOn(false);
+  };
+
+  const stopAllCameras = () => {
+    stopPortraitCamera();
+    stopLivenessCamera();
+  };
+
+  const startPortraitCamera = async () => {
     if (typeof navigator === "undefined" || !navigator.mediaDevices) return;
     try {
-      stopCamera();
+      stopPortraitCamera();
       const stream = await navigator.mediaDevices.getUserMedia({
         video: {
           facingMode: "user",
@@ -73,17 +110,35 @@ function Home({ amplifyOutputs }) {
           height: { ideal: 1080 }
         }
       });
-      streamRef.current = stream;
-      setCameraOn(true);
+      portraitStreamRef.current = stream;
+      setPortraitCameraOn(true);
     } catch (error) {
-      console.error("No se pudo iniciar la cámara", error);
+      console.error("No se pudo iniciar la cámara de retrato", error);
+    }
+  };
+
+  const startLivenessCamera = async () => {
+    if (typeof navigator === "undefined" || !navigator.mediaDevices) return;
+    try {
+      stopLivenessCamera();
+      const stream = await navigator.mediaDevices.getUserMedia({
+        video: {
+          facingMode: "user",
+          width: { ideal: 1280 },
+          height: { ideal: 720 }
+        }
+      });
+      livenessStreamRef.current = stream;
+      setLivenessCameraOn(true);
+    } catch (error) {
+      console.error("No se pudo iniciar la cámara para prueba de vida", error);
     }
   };
 
   const capturePhoto = () => {
-    if (!videoRef.current || !canvasRef.current) return;
-    const video = videoRef.current;
-    const canvas = canvasRef.current;
+    if (!portraitVideoRef.current || !portraitCanvasRef.current) return;
+    const video = portraitVideoRef.current;
+    const canvas = portraitCanvasRef.current;
     const sourceWidth = video.videoWidth || 1280;
     const sourceHeight = video.videoHeight || 720;
     const targetRatio = 3 / 4;
@@ -112,15 +167,14 @@ function Home({ amplifyOutputs }) {
 
     const dataUrl = canvas.toDataURL("image/jpeg", 0.92);
     setPhotoDataUrl(dataUrl);
-    resetBiometricState();
-    stopCamera();
+    stopPortraitCamera();
   };
 
   const handlePhotoFileChange = async (event) => {
     const file = event.target.files?.[0];
     if (!file) return;
     try {
-      stopCamera();
+      stopPortraitCamera();
       const fileDataUrl = await new Promise((resolve, reject) => {
         const reader = new FileReader();
         reader.onload = () => {
@@ -131,7 +185,6 @@ function Home({ amplifyOutputs }) {
         reader.readAsDataURL(file);
       });
       setPhotoDataUrl(fileDataUrl);
-      resetBiometricState();
     } catch (error) {
       console.error("No se pudo cargar la foto", error);
     }
@@ -139,7 +192,7 @@ function Home({ amplifyOutputs }) {
 
   useEffect(
     () => () => {
-      stopCamera();
+      stopAllCameras();
     },
     // eslint-disable-next-line react-hooks/exhaustive-deps
     []
@@ -162,11 +215,13 @@ function Home({ amplifyOutputs }) {
   const secondaryButtonClass =
     "px-3 py-2 text-xs rounded-[20px] border border-[#3864d9] bg-white hover:bg-[#ecf2ff] text-[#3864d9] font-semibold";
 
-  const resetBiometricState = () => {
-    setBiometricStatus("");
-    setBiometricError("");
-    setBiometricResult("");
-    setBiometricScore(null);
+  const resetLivenessState = () => {
+    setLivenessStatus("");
+    setLivenessError("");
+    setLivenessApproved(false);
+    setLivenessStepIndex(0);
+    setLivenessPreviewDataUrl("");
+    livenessFramesRef.current = [];
   };
 
   const normalizeNameText = (value) =>
@@ -380,119 +435,353 @@ function Home({ amplifyOutputs }) {
       const image = new Image();
       image.onload = () => resolve(image);
       image.onerror = () =>
-        reject(new Error("No se pudo cargar la imagen para validación biométrica."));
+        reject(new Error("No se pudo cargar imagen para la prueba de vida."));
       image.src = dataUrl;
     });
 
-  const getFaceApi = async () => {
-    if (faceApiRef.current) return faceApiRef.current;
-    const module = await import("face-api.js");
-    faceApiRef.current = module;
-    return module;
+  const calculateFrameDifference = async (firstFrame, secondFrame) => {
+    const [imgA, imgB] = await Promise.all([
+      loadImageFromDataUrl(firstFrame),
+      loadImageFromDataUrl(secondFrame)
+    ]);
+    const canvas = document.createElement("canvas");
+    const context = canvas.getContext("2d");
+    if (!context) return 0;
+    canvas.width = 96;
+    canvas.height = 96;
+
+    const getPixels = (image) => {
+      context.clearRect(0, 0, canvas.width, canvas.height);
+      context.drawImage(image, 0, 0, canvas.width, canvas.height);
+      return context.getImageData(0, 0, canvas.width, canvas.height).data;
+    };
+
+    const pixelsA = getPixels(imgA);
+    const pixelsB = getPixels(imgB);
+    let diffSum = 0;
+    for (let i = 0; i < pixelsA.length; i += 4) {
+      const grayA = (pixelsA[i] + pixelsA[i + 1] + pixelsA[i + 2]) / 3;
+      const grayB = (pixelsB[i] + pixelsB[i + 1] + pixelsB[i + 2]) / 3;
+      diffSum += Math.abs(grayA - grayB) / 255;
+    }
+    return diffSum / (pixelsA.length / 4);
   };
 
-  const loadFaceApiModels = async () => {
-    const faceapi = await getFaceApi();
-    if (faceApiModelsLoadedRef.current) return faceapi;
+  const getFaceDetector = () => {
+    if (typeof window === "undefined" || typeof window.FaceDetector === "undefined") {
+      return null;
+    }
+    if (!faceDetectorRef.current) {
+      faceDetectorRef.current = new window.FaceDetector({
+        fastMode: true,
+        maxDetectedFaces: 1
+      });
+    }
+    return faceDetectorRef.current;
+  };
 
-    const modelSources = [
-      "/models",
-      "https://cdn.jsdelivr.net/gh/justadudewhohacks/face-api.js@master/weights",
-      "https://justadudewhohacks.github.io/face-api.js/models"
-    ];
-
-    setBiometricStatus("Cargando motor biométrico...");
-    let lastError = null;
-
-    for (const modelsBaseUrl of modelSources) {
-      try {
-        await Promise.all([
-          faceapi.nets.tinyFaceDetector.loadFromUri(modelsBaseUrl),
-          faceapi.nets.faceLandmark68Net.loadFromUri(modelsBaseUrl),
-          faceapi.nets.faceRecognitionNet.loadFromUri(modelsBaseUrl)
-        ]);
-        faceApiModelsLoadedRef.current = true;
-        return faceapi;
-      } catch (error) {
-        lastError = error;
-      }
+  const detectSingleFaceMetrics = async (detector, canvas) => {
+    const faces = await detector.detect(canvas);
+    if (!faces?.length) {
+      throw new Error("No se detectó el rostro. Mantén tu cara dentro del recuadro.");
+    }
+    if (faces.length > 1) {
+      throw new Error("Se detectaron varios rostros. Realiza la prueba con una sola persona.");
     }
 
-    throw (
-      lastError ||
-      new Error(
-        "No se pudieron cargar los modelos biométricos desde las fuentes configuradas."
-      )
+    const box = faces[0]?.boundingBox;
+    if (!box?.width || !box?.height) {
+      throw new Error("No se pudo medir el rostro. Ajusta iluminación y distancia.");
+    }
+
+    return {
+      centerX: box.x + box.width / 2,
+      centerY: box.y + box.height / 2,
+      area: box.width * box.height
+    };
+  };
+
+  const waitForVideoReady = (video, timeoutMs = 4000) =>
+    new Promise((resolve, reject) => {
+      if (!video) {
+        reject(new Error("No se pudo inicializar la cámara."));
+        return;
+      }
+      if (video.readyState >= 2 && video.videoWidth > 0 && video.videoHeight > 0) {
+        resolve();
+        return;
+      }
+
+      const timeoutId = window.setTimeout(() => {
+        cleanup();
+        reject(new Error("La cámara tardó demasiado en iniciar."));
+      }, timeoutMs);
+
+      const onReady = () => {
+        cleanup();
+        resolve();
+      };
+
+      const cleanup = () => {
+        window.clearTimeout(timeoutId);
+        video.removeEventListener("loadeddata", onReady);
+        video.removeEventListener("canplay", onReady);
+      };
+
+      video.addEventListener("loadeddata", onReady);
+      video.addEventListener("canplay", onReady);
+    });
+
+  const wait = (ms) => new Promise((resolve) => setTimeout(resolve, ms));
+
+  const captureLivenessFrame = (ctx, video, canvas) => {
+    ctx.drawImage(video, 0, 0, canvas.width, canvas.height);
+    return canvas.toDataURL("image/jpeg", 0.9);
+  };
+
+  const completeLivenessStepWithDetector = async ({
+    stepIndex,
+    detector,
+    ctx,
+    video,
+    canvas,
+    baselineCenterX,
+    baselineArea,
+    sideDirection
+  }) => {
+    const startedAt = Date.now();
+    const maxStepMs = 9000;
+    const minStepMs = 1400;
+    const requiredStableFrames = 3;
+    let stableFrames = 0;
+    let lastError = "No se pudo detectar el rostro.";
+
+    while (Date.now() - startedAt < maxStepMs) {
+      try {
+        const frameData = captureLivenessFrame(ctx, video, canvas);
+        const metrics = await detectSingleFaceMetrics(detector, canvas);
+        const normalizedX = metrics.centerX / canvas.width;
+
+        if (stepIndex === 0) {
+          if (Math.abs(normalizedX - 0.5) <= 0.12) {
+            stableFrames += 1;
+            if (Date.now() - startedAt >= minStepMs && stableFrames >= requiredStableFrames) {
+              return {
+                frameData,
+                metrics,
+                baselineCenterX: metrics.centerX,
+                baselineArea: metrics.area,
+                sideDirection: 0
+              };
+            }
+          } else {
+            stableFrames = 0;
+          }
+        } else if (stepIndex === 1 && baselineCenterX && baselineArea) {
+          const horizontalDelta = (metrics.centerX - baselineCenterX) / canvas.width;
+          const areaRatio = metrics.area / Math.max(1, baselineArea);
+          const minHorizontalMove = 0.08;
+          if (Math.abs(horizontalDelta) >= minHorizontalMove && areaRatio > 0.55 && areaRatio < 1.9) {
+            stableFrames += 1;
+            if (Date.now() - startedAt >= minStepMs && stableFrames >= requiredStableFrames) {
+              return {
+                frameData,
+                metrics,
+                baselineCenterX,
+                baselineArea,
+                sideDirection: horizontalDelta > 0 ? 1 : -1
+              };
+            }
+          } else {
+            stableFrames = 0;
+          }
+        } else if (stepIndex === 2 && baselineCenterX && sideDirection) {
+          const horizontalDelta = (metrics.centerX - baselineCenterX) / canvas.width;
+          const movedOpposite = sideDirection > 0 ? horizontalDelta < -0.08 : horizontalDelta > 0.08;
+          if (movedOpposite) {
+            stableFrames += 1;
+            if (Date.now() - startedAt >= minStepMs && stableFrames >= requiredStableFrames) {
+              return {
+                frameData,
+                metrics,
+                baselineCenterX,
+                baselineArea,
+                sideDirection
+              };
+            }
+          } else {
+            stableFrames = 0;
+          }
+        }
+      } catch (error) {
+        lastError = error?.message || lastError;
+      }
+      await wait(260);
+    }
+
+    if (stepIndex === 0) {
+      throw new Error("No se detectó posición frontal. Mira al frente y mantén el rostro centrado.");
+    }
+    if (stepIndex === 1) {
+      throw new Error(
+        "No se detectó giro lateral. Gira levemente tu rostro hacia un lado para continuar."
+      );
+    }
+    if (stepIndex === 2) {
+      throw new Error(
+        "No se detectó giro al lado contrario. Completa el último movimiento para finalizar."
+      );
+    }
+    throw new Error(lastError);
+  };
+
+  const completeLivenessStepWithFallback = async ({
+    stepIndex,
+    ctx,
+    video,
+    canvas,
+    previousFrameData
+  }) => {
+    const startedAt = Date.now();
+    const maxStepMs = 9000;
+    const minStepMs = 1400;
+    const requiredStableFrames = 3;
+    let stableFrames = 0;
+
+    if (stepIndex === 0) {
+      await wait(minStepMs);
+      return {
+        frameData: captureLivenessFrame(ctx, video, canvas)
+      };
+    }
+
+    while (Date.now() - startedAt < maxStepMs) {
+      const frameData = captureLivenessFrame(ctx, video, canvas);
+      const diff = await calculateFrameDifference(previousFrameData, frameData);
+      if (diff >= 0.055) {
+        stableFrames += 1;
+        if (Date.now() - startedAt >= minStepMs && stableFrames >= requiredStableFrames) {
+          return { frameData };
+        }
+      } else {
+        stableFrames = 0;
+      }
+      await wait(260);
+    }
+
+    throw new Error(
+      "No se detectó movimiento suficiente en este paso. Realiza el gesto indicado para continuar."
     );
   };
 
-  const detectPrimaryDescriptor = async (faceapi, image) => {
-    const detections = await faceapi
-      .detectAllFaces(image, new faceapi.TinyFaceDetectorOptions())
-      .withFaceLandmarks()
-      .withFaceDescriptors();
-
-    if (!detections.length) return null;
-
-    const sorted = [...detections].sort((a, b) => {
-      const areaA = a.detection.box.width * a.detection.box.height;
-      const areaB = b.detection.box.width * b.detection.box.height;
-      return areaB - areaA;
-    });
-    return sorted[0].descriptor;
-  };
-
-  const runBiometricValidation = async () => {
-    resetBiometricState();
-
-    if (!idDocumentImageDataUrl) {
-      setBiometricError("Primero carga un documento de identidad con foto.");
-      return;
+  const runLivenessCheck = async () => {
+    if (!livenessCameraOn) {
+      await startLivenessCamera();
+      await new Promise((resolve) => setTimeout(resolve, 350));
     }
-    if (!photoDataUrl) {
-      setBiometricError("Primero captura o sube la foto del asegurado.");
+    if (!livenessVideoRef.current || !livenessCanvasRef.current || !livenessStreamRef.current) {
+      setLivenessError("No se pudo activar la cámara para la prueba de vida.");
       return;
     }
 
-    setIsBiometricRunning(true);
+    setLivenessError("");
+    setLivenessStatus("Iniciando prueba de vida...");
+    setIsLivenessRunning(true);
+    setLivenessApproved(false);
+    setLivenessStepIndex(0);
+    setLivenessPreviewDataUrl("");
+    livenessFramesRef.current = [];
+
+    const video = livenessVideoRef.current;
+    const canvas = livenessCanvasRef.current;
+    const ctx = canvas.getContext("2d");
+    if (!ctx) {
+      setLivenessError("No se pudo inicializar la prueba de vida.");
+      setIsLivenessRunning(false);
+      return;
+    }
+
+    const challenges = [
+      "Mira al frente",
+      "Gira levemente hacia un lado",
+      "Ahora gira hacia el lado contrario"
+    ];
+
     try {
-      const faceapi = await loadFaceApiModels();
-      setBiometricStatus("Preparando validación biométrica...");
+      await waitForVideoReady(video);
+      canvas.width = 480;
+      canvas.height = 640;
+      const detector = getFaceDetector();
+      let baselineCenterX = 0;
+      let baselineArea = 0;
+      let sideDirection = 0;
 
-      const [documentImage, selfieImage] = await Promise.all([
-        loadImageFromDataUrl(idDocumentImageDataUrl),
-        loadImageFromDataUrl(photoDataUrl)
+      for (let index = 0; index < challenges.length; index += 1) {
+        setLivenessStepIndex(index + 1);
+        setLivenessStatus(`${index + 1}/3: ${challenges[index]}...`);
+        await wait(350);
+
+        if (detector) {
+          const stepResult = await completeLivenessStepWithDetector({
+            stepIndex: index,
+            detector,
+            ctx,
+            video,
+            canvas,
+            baselineCenterX,
+            baselineArea,
+            sideDirection
+          });
+          baselineCenterX = stepResult.baselineCenterX || baselineCenterX;
+          baselineArea = stepResult.baselineArea || baselineArea;
+          sideDirection = stepResult.sideDirection || sideDirection;
+          livenessFramesRef.current.push(stepResult.frameData);
+        } else {
+          const stepResult = await completeLivenessStepWithFallback({
+            stepIndex: index,
+            ctx,
+            video,
+            canvas,
+            previousFrameData: livenessFramesRef.current[index - 1]
+          });
+          livenessFramesRef.current.push(stepResult.frameData);
+        }
+      }
+
+      const [frame1, frame2, frame3] = livenessFramesRef.current;
+      const [diff12, diff23, diff13] = await Promise.all([
+        calculateFrameDifference(frame1, frame2),
+        calculateFrameDifference(frame2, frame3),
+        calculateFrameDifference(frame1, frame3)
       ]);
+      const minStepMotion = 0.035;
+      const totalMotion = 0.055;
+      const strongStepMotion = 0.065;
+      const maxStep = Math.max(diff12, diff23);
 
-      setBiometricStatus("Analizando rostro del documento...");
-      const documentDescriptor = await detectPrimaryDescriptor(faceapi, documentImage);
-      if (!documentDescriptor) {
-        throw new Error("No se detectó rostro en el documento cargado.");
+      const fallbackMotionFailed =
+        diff12 < minStepMotion ||
+        diff23 < minStepMotion ||
+        diff13 < totalMotion ||
+        maxStep < strongStepMotion;
+
+      if (fallbackMotionFailed) {
+        throw new Error(
+          "No se detectó suficiente movimiento. Repite la prueba moviendo el rostro según las indicaciones."
+        );
       }
 
-      setBiometricStatus("Analizando selfie del titular...");
-      const selfieDescriptor = await detectPrimaryDescriptor(faceapi, selfieImage);
-      if (!selfieDescriptor) {
-        throw new Error("No se detectó rostro en la foto del asegurado.");
-      }
-
-      const distance = faceapi.euclideanDistance(documentDescriptor, selfieDescriptor);
-      const threshold = 0.55;
-      const score = Math.max(0, Math.min(1, 1 - distance / 0.8));
-      const isMatch = distance <= threshold;
-
-      setBiometricScore(score);
-      setBiometricResult(isMatch ? "match" : "no_match");
-      setBiometricStatus(
-        isMatch
-          ? "Validación biométrica aprobada."
-          : "Validación biométrica no concluyente."
-      );
+      setLivenessPreviewDataUrl(frame1);
+      setLivenessApproved(true);
+      setLivenessStatus("Prueba de vida aprobada.");
+      stopLivenessCamera();
     } catch (error) {
-      console.error("Error en validación biométrica", error);
-      setBiometricError(error?.message || "No se pudo completar la validación biométrica.");
+      console.error("Error en prueba de vida", error);
+      setLivenessError(error?.message || "No se pudo completar la prueba de vida.");
+      setLivenessStatus("");
+      setLivenessApproved(false);
     } finally {
-      setIsBiometricRunning(false);
+      setIsLivenessRunning(false);
     }
   };
 
@@ -505,7 +794,7 @@ function Home({ amplifyOutputs }) {
     setIdReadDebug("");
     setOcrStatus("Preparando análisis del documento...");
     setIdFileName(file.name || "");
-    resetBiometricState();
+    resetLivenessState();
     setIsReadingId(true);
 
     try {
@@ -586,16 +875,35 @@ function Home({ amplifyOutputs }) {
     setFirstNames("");
     setLastNames("");
     setOcrStatus("");
-    setIsBiometricRunning(false);
+    setIsLivenessRunning(false);
     if (idFileInputRef.current) {
       idFileInputRef.current.value = "";
     }
-    resetBiometricState();
+    resetLivenessState();
   };
 
   const handleSubmit = (event) => {
     event.preventDefault();
+    setRegistrationStep(2);
+    resetLivenessState();
+    setLivenessError("");
+    setLivenessStatus("");
+    stopLivenessCamera();
+  };
+
+  const handleFinishRegistration = () => {
+    if (!livenessApproved) {
+      setLivenessError("Completa y aprueba la prueba de vida para continuar.");
+      return;
+    }
     setIsPreview(true);
+  };
+
+  const goToHomeStart = () => {
+    stopAllCameras();
+    setIsPreview(false);
+    setRegistrationStep(1);
+    setIsIntro(true);
   };
 
   if (!isPreview && isIntro) {
@@ -638,7 +946,10 @@ function Home({ amplifyOutputs }) {
                   <div className="mt-8">
                     <button
                       type="button"
-                      onClick={() => setIsIntro(false)}
+                      onClick={() => {
+                        setIsIntro(false);
+                        setRegistrationStep(1);
+                      }}
                       className="inline-flex items-center rounded-[14px] bg-[#12a150] px-8 py-3 text-white text-lg font-bold shadow-[0_12px_24px_rgba(18,161,80,0.28)] hover:bg-[#0f8c46] active:bg-[#0b7439] transition-colors focus:outline-none focus:ring-2 focus:ring-[#12a150] focus:ring-offset-2"
                     >
                       Iniciar registro
@@ -742,74 +1053,80 @@ function Home({ amplifyOutputs }) {
                   ) : null}
                 </div>
 
-                <div>
-                  <label className="block text-sm font-semibold text-[#22355d] mb-1">
-                    Número de cédula
-                  </label>
-                  <input
-                    type="text"
-                    value={identificationNumber}
-                    onChange={(e) => setIdentificationNumber(e.target.value)}
-                    required
-                    className={inputClass}
-                    placeholder="Ej: V12345678"
-                  />
-                </div>
+                {registrationStep === 1 ? (
+                  <>
+                    <div>
+                      <label className="block text-sm font-semibold text-[#22355d] mb-1">
+                        Número de cédula
+                      </label>
+                      <input
+                        type="text"
+                        value={identificationNumber}
+                        onChange={(e) => setIdentificationNumber(e.target.value)}
+                        required
+                        className={inputClass}
+                        placeholder="Ej: V12345678"
+                      />
+                    </div>
 
-                <div>
-                  <label className="block text-sm font-semibold text-[#22355d] mb-1">
-                    Nombres
-                  </label>
-                  <input
-                    type="text"
-                    value={firstNames}
-                    onChange={(e) => setFirstNames(e.target.value)}
-                    required
-                    className={inputClass}
-                    placeholder="Ej: Maria Milagros"
-                  />
-                </div>
+                    <div>
+                      <label className="block text-sm font-semibold text-[#22355d] mb-1">
+                        Nombres
+                      </label>
+                      <input
+                        type="text"
+                        value={firstNames}
+                        onChange={(e) => setFirstNames(e.target.value)}
+                        required
+                        className={inputClass}
+                        placeholder="Ej: Maria Milagros"
+                      />
+                    </div>
 
-                <div>
-                  <label className="block text-sm font-semibold text-[#22355d] mb-1">
-                    Apellidos
-                  </label>
-                  <input
-                    type="text"
-                    value={lastNames}
-                    onChange={(e) => setLastNames(e.target.value)}
-                    required
-                    className={inputClass}
-                    placeholder="Ej: Lastra Perez"
-                  />
-                </div>
+                    <div>
+                      <label className="block text-sm font-semibold text-[#22355d] mb-1">
+                        Apellidos
+                      </label>
+                      <input
+                        type="text"
+                        value={lastNames}
+                        onChange={(e) => setLastNames(e.target.value)}
+                        required
+                        className={inputClass}
+                        placeholder="Ej: Lastra Perez"
+                      />
+                    </div>
 
-                <div>
-                  <label className="block text-sm font-semibold text-[#22355d] mb-1">
-                    Correo electrónico
-                  </label>
-                  <input
-                    type="email"
-                    value={email}
-                    onChange={(e) => setEmail(e.target.value)}
-                    required
-                    className={inputClass}
-                    placeholder="Ej: persona@correo.com"
-                  />
-                </div>
+                    <div>
+                      <label className="block text-sm font-semibold text-[#22355d] mb-1">
+                        Correo electrónico
+                      </label>
+                      <input
+                        type="email"
+                        value={email}
+                        onChange={(e) => setEmail(e.target.value)}
+                        required
+                        className={inputClass}
+                        placeholder="Ej: persona@correo.com"
+                      />
+                    </div>
+                  </>
+                ) : null}
 
-                <div className="pt-3 border-t border-[#e4ebfa]">
+                {registrationStep === 2 ? (
+                  <>
+                  <div className="pt-3 border-t border-[#e4ebfa]">
                   <p className="text-sm font-semibold text-[#3864d9] mb-1">
-                    Foto del asegurado (opcional)
+                    Módulo retrato para el carnet
                   </p>
                   <p className="text-xs text-[#5f6f8f] mb-3">
-                    Puedes activar la cámara o subir una imagen para el carnet.
+                    Captura o sube un retrato del titular para mostrarlo en el carnet digital.
                   </p>
                   <div className="space-y-3">
                     <div className="mx-auto w-52 h-72 rounded-[10px] border border-[#cfdcf8] bg-[#edf3ff] flex items-center justify-center overflow-hidden">
-                      {cameraOn ? (
+                      {portraitCameraOn ? (
                         <video
-                          ref={videoRef}
+                          ref={portraitVideoRef}
                           className="w-full h-full object-cover"
                           autoPlay
                           playsInline
@@ -818,12 +1135,12 @@ function Home({ amplifyOutputs }) {
                       ) : photoDataUrl ? (
                         <img
                           src={photoDataUrl}
-                          alt="Foto capturada"
+                          alt="Retrato del titular"
                           className="w-full h-full object-cover"
                         />
                       ) : (
                         <span className="text-xs text-[#5f6f8f] px-4 text-center">
-                          Sin foto seleccionada
+                          Activa cámara para iniciar
                         </span>
                       )}
                     </div>
@@ -835,25 +1152,25 @@ function Home({ amplifyOutputs }) {
                       className="hidden"
                     />
                     <div className="flex flex-wrap items-center justify-center gap-2">
-                      {!cameraOn && (
+                      {!portraitCameraOn && (
                         <button
                           type="button"
-                          onClick={startCamera}
+                          onClick={startPortraitCamera}
                           className={secondaryButtonClass}
                         >
                           Activar cámara
                         </button>
                       )}
-                      {!cameraOn && (
+                      {!portraitCameraOn && (
                         <button
                           type="button"
                           onClick={() => photoFileInputRef.current?.click()}
                           className={secondaryButtonClass}
                         >
-                          Subir foto
+                          Subir retrato
                         </button>
                       )}
-                      {cameraOn && (
+                      {portraitCameraOn && (
                         <button
                           type="button"
                           onClick={capturePhoto}
@@ -862,10 +1179,10 @@ function Home({ amplifyOutputs }) {
                           Capturar foto
                         </button>
                       )}
-                      {cameraOn && (
+                      {portraitCameraOn && (
                         <button
                           type="button"
-                          onClick={stopCamera}
+                          onClick={stopPortraitCamera}
                           className={secondaryButtonClass}
                         >
                           Detener cámara
@@ -876,7 +1193,6 @@ function Home({ amplifyOutputs }) {
                           type="button"
                           onClick={() => {
                             setPhotoDataUrl("");
-                            resetBiometricState();
                             if (photoFileInputRef.current) {
                               photoFileInputRef.current.value = "";
                             }
@@ -887,67 +1203,107 @@ function Home({ amplifyOutputs }) {
                         </button>
                       )}
                     </div>
-                    <canvas ref={canvasRef} className="hidden" />
+                    <canvas ref={portraitCanvasRef} className="hidden" />
                   </div>
                 </div>
 
                 <div className="rounded-[12px] border border-[#d9e3fb] bg-[#f6f9ff] p-3">
                   <p className="text-sm font-semibold text-[#22355d]">
-                    Validación biométrica
+                    Módulo prueba de vida
                   </p>
                   <p className="mt-1 text-xs text-[#5f6f8f]">
-                    Compara rostro del documento con la foto del titular.
+                    Ahora valida presencia en vivo completando los 3 movimientos.
                   </p>
                   <div className="mt-2 grid grid-cols-1 sm:grid-cols-2 gap-2 text-xs">
                     <p className="rounded-[8px] bg-white border border-[#d9e3fb] px-2 py-1 text-[#34517f]">
                       Documento: {idDocumentImageDataUrl ? "Listo" : "Pendiente"}
                     </p>
                     <p className="rounded-[8px] bg-white border border-[#d9e3fb] px-2 py-1 text-[#34517f]">
-                      Foto titular: {photoDataUrl ? "Lista" : "Pendiente"}
+                      Estado: {livenessApproved ? "Aprobada" : isLivenessRunning ? "En proceso" : "Pendiente"}
                     </p>
                   </div>
-                  <div className="mt-2">
+                  <div className="mt-2 flex flex-wrap items-center gap-2">
                     <button
                       type="button"
-                      onClick={runBiometricValidation}
-                      disabled={isBiometricRunning}
+                      onClick={runLivenessCheck}
+                      disabled={isLivenessRunning}
                       className="px-3 py-2 text-xs rounded-[20px] border border-[#12a150] bg-[#12a150] hover:bg-[#0f8c46] text-white font-semibold disabled:opacity-70"
                     >
-                      {isBiometricRunning ? "Validando..." : "Validar biometría"}
+                      {isLivenessRunning
+                        ? "Validando..."
+                        : "Iniciar prueba de vida"}
                     </button>
                   </div>
-                  {biometricStatus ? (
-                    <p className="mt-2 text-xs text-[#34517f]">{biometricStatus}</p>
+                  <div className="mt-2 mx-auto w-40 h-52 rounded-[10px] border border-[#cfdcf8] bg-[#edf3ff] flex items-center justify-center overflow-hidden">
+                    {livenessCameraOn ? (
+                      <video
+                        ref={livenessVideoRef}
+                        className="w-full h-full object-cover"
+                        autoPlay
+                        playsInline
+                        muted
+                      />
+                    ) : livenessPreviewDataUrl ? (
+                      <img
+                        src={livenessPreviewDataUrl}
+                        alt="Captura de prueba de vida"
+                        className="w-full h-full object-cover"
+                      />
+                    ) : (
+                      <span className="text-xs text-[#5f6f8f] px-3 text-center">
+                        Cámara de prueba de vida inactiva
+                      </span>
+                    )}
+                  </div>
+                  <canvas ref={livenessCanvasRef} className="hidden" />
+                  {livenessStatus ? (
+                    <p className="mt-2 text-xs text-[#34517f]">
+                      Paso {livenessStepIndex || 1}/3: {livenessStatus}
+                    </p>
                   ) : null}
-                  {biometricError ? (
-                    <p className="mt-2 text-xs text-[#b42318]">{biometricError}</p>
+                  {livenessError ? (
+                    <p className="mt-2 text-xs text-[#b42318]">{livenessError}</p>
                   ) : null}
-                  {biometricResult ? (
-                    <p
-                      className={`mt-2 text-xs font-semibold ${
-                        biometricResult === "match" ? "text-[#0f8c46]" : "text-[#b42318]"
-                      }`}
-                    >
-                      {biometricResult === "match"
-                        ? "Coincidencia biométrica: Aprobada"
-                        : "Coincidencia biométrica: Revisar manualmente"}
-                      {typeof biometricScore === "number"
-                        ? ` (${Math.round(biometricScore * 100)}%)`
-                        : ""}
+                  {livenessApproved ? (
+                    <p className="mt-2 text-xs font-semibold text-[#0f8c46]">
+                      Prueba de vida aprobada.
                     </p>
                   ) : null}
                 </div>
+                  </>
+                ) : null}
 
                 <div className="pt-2">
-                  <button type="submit" className={primaryButtonClass}>
-                    Acceder a wallet
-                  </button>
+                  {registrationStep === 1 ? (
+                    <button type="submit" className={primaryButtonClass}>
+                      Siguiente
+                    </button>
+                  ) : (
+                    <button
+                      type="button"
+                      onClick={handleFinishRegistration}
+                      className={primaryButtonClass}
+                    >
+                      Continuar
+                    </button>
+                  )}
+                  {registrationStep === 2 ? (
+                    <button
+                      type="button"
+                      onClick={() => {
+                        stopLivenessCamera();
+                        setRegistrationStep(1);
+                        setLivenessError("");
+                        setLivenessStatus("");
+                      }}
+                      className="mt-3 w-full px-8 py-3 rounded-[20px] border border-[#3864d9] bg-white hover:bg-[#ecf2ff] text-[#3864d9] text-base font-bold transition-colors focus:outline-none focus:ring-2 focus:ring-[#3864d9] focus:ring-offset-2 focus:ring-offset-white"
+                    >
+                      Volver al paso 1
+                    </button>
+                  ) : null}
                   <button
                     type="button"
-                    onClick={() => {
-                      stopCamera();
-                      setIsIntro(true);
-                    }}
+                    onClick={goToHomeStart}
                     className="mt-3 w-full px-8 py-3 rounded-[20px] border border-[#3c4c69] bg-white hover:bg-[#eef3fb] text-[#3c4c69] text-base font-bold transition-colors focus:outline-none focus:ring-2 focus:ring-[#3c4c69] focus:ring-offset-2 focus:ring-offset-white"
                   >
                     Salir
@@ -1016,6 +1372,15 @@ function Home({ amplifyOutputs }) {
         </div>
 
         <div className="p-6 sm:p-8 text-center">
+          <div className="flex justify-end">
+            <button
+              type="button"
+              onClick={goToHomeStart}
+              className="px-4 py-2 text-sm rounded-[20px] border border-[#3c4c69] bg-white hover:bg-[#eef3fb] text-[#3c4c69] font-semibold transition-colors focus:outline-none focus:ring-2 focus:ring-[#3c4c69] focus:ring-offset-2"
+            >
+              Salir
+            </button>
+          </div>
           <h1 className="text-2xl font-bold text-[#22355d]">Vista previa del carnet</h1>
           <p className="text-sm text-[#5f6f8f] mt-1">Así se verá el carnet digital del asegurado.</p>
           <div className="mt-6">
