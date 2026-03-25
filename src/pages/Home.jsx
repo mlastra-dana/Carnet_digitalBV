@@ -24,6 +24,8 @@ function Home({ amplifyOutputs }) {
   const [livenessError, setLivenessError] = useState("");
   const [livenessStepIndex, setLivenessStepIndex] = useState(0);
   const [livenessPreviewDataUrl, setLivenessPreviewDataUrl] = useState("");
+  const [conversationStatus, setConversationStatus] = useState("");
+  const [conversationError, setConversationError] = useState("");
 
   const portraitVideoRef = useRef(null);
   const portraitCanvasRef = useRef(null);
@@ -888,15 +890,55 @@ function Home({ amplifyOutputs }) {
     resetLivenessState();
     setLivenessError("");
     setLivenessStatus("");
+    setConversationStatus("");
+    setConversationError("");
     stopLivenessCamera();
   };
 
-  const handleFinishRegistration = () => {
+  const startDanaConversation = async () => {
+    const fullName = `${firstNames} ${lastNames}`.replace(/\s+/g, " ").trim();
+    const payload = {
+      NOMBRECLIENTE: fullName || "Cliente",
+      DOCUMENT_ID: (identificationNumber || "").trim(),
+      EMAIL: (email || "").trim(),
+      PKPASS: "pendiente"
+    };
+
+    const response = await fetch(
+      `${apiBaseUrl.replace(/\/+$/, "")}/start-conversation`,
+      {
+        method: "POST",
+        headers: {
+          "Content-Type": "application/json"
+        },
+        body: JSON.stringify(payload)
+      }
+    );
+
+    if (!response.ok) {
+      throw new Error("No se pudo iniciar la conversación en DANA.");
+    }
+  };
+
+  const handleFinishRegistration = async () => {
     if (!livenessApproved) {
       setLivenessError("Completa y aprueba la prueba de vida para continuar.");
       return;
     }
-    setIsPreview(true);
+    setConversationStatus("Enviando datos a DANA...");
+    setConversationError("");
+
+    try {
+      await startDanaConversation();
+      setConversationStatus("Conversación iniciada en DANA.");
+      setIsPreview(true);
+    } catch (error) {
+      console.error("Error iniciando conversación en DANA", error);
+      setConversationStatus("");
+      setConversationError(
+        "No se pudo iniciar la conversación en DANA. Revisa conexión o credenciales."
+      );
+    }
   };
 
   const goToHomeStart = () => {
@@ -1308,6 +1350,12 @@ function Home({ amplifyOutputs }) {
                   >
                     Salir
                   </button>
+                  {conversationStatus ? (
+                    <p className="mt-3 text-xs text-[#0f8c46]">{conversationStatus}</p>
+                  ) : null}
+                  {conversationError ? (
+                    <p className="mt-2 text-xs text-[#b42318]">{conversationError}</p>
+                  ) : null}
                 </div>
               </form>
             </div>
