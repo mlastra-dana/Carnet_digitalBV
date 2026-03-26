@@ -26,6 +26,7 @@ function Home({ amplifyOutputs }) {
   const [livenessPreviewDataUrl, setLivenessPreviewDataUrl] = useState("");
   const [conversationStatus, setConversationStatus] = useState("");
   const [conversationError, setConversationError] = useState("");
+  const [isSendingConversation, setIsSendingConversation] = useState(false);
 
   const portraitVideoRef = useRef(null);
   const portraitCanvasRef = useRef(null);
@@ -895,8 +896,50 @@ function Home({ amplifyOutputs }) {
     stopLivenessCamera();
   };
 
+  const getPkpassApiBaseUrl = () =>
+    (import.meta.env.VITE_PKPASS_API_URL || apiBaseUrl).replace(/\/+$/, "");
+
+  const buildPkpassBlob = async () => {
+    const fullName = `${firstNames} ${lastNames}`.replace(/\s+/g, " ").trim();
+    const payload = {
+      name: fullName || "Cliente",
+      email: (email || "").trim(),
+      photoDataUrl: photoDataUrl || null
+    };
+
+    const response = await fetch(`${getPkpassApiBaseUrl()}/pkpass`, {
+      method: "POST",
+      headers: {
+        "Content-Type": "application/json"
+      },
+      body: JSON.stringify(payload)
+    });
+
+    if (!response.ok) {
+      throw new Error("No se pudo generar el archivo PKPASS.");
+    }
+
+    return response.blob();
+  };
+
+  const blobToBase64 = (blob) =>
+    new Promise((resolve, reject) => {
+      const reader = new FileReader();
+      reader.onload = () => {
+        if (typeof reader.result !== "string") {
+          reject(new Error("No se pudo convertir PKPASS a base64."));
+          return;
+        }
+        const base64 = reader.result.split(",")[1] || "";
+        resolve(base64);
+      };
+      reader.onerror = () => reject(new Error("No se pudo convertir PKPASS a base64."));
+      reader.readAsDataURL(blob);
+    });
+
   const startDanaConversation = async () => {
     const fullName = `${firstNames} ${lastNames}`.replace(/\s+/g, " ").trim();
+
     const payload = {
       NOMBRECLIENTE: fullName || "Cliente",
       DOCUMENT_ID: (identificationNumber || "").trim(),
@@ -920,29 +963,39 @@ function Home({ amplifyOutputs }) {
     }
   };
 
-  const handleFinishRegistration = async () => {
+  const handleFinishRegistration = () => {
     if (!livenessApproved) {
       setLivenessError("Completa y aprueba la prueba de vida para continuar.");
       return;
     }
+    setConversationStatus("");
+    setConversationError("");
+    setIsPreview(true);
+  };
+
+  const handleCompleteRegistration = async () => {
     setConversationStatus("Enviando datos a DANA...");
     setConversationError("");
+    setIsSendingConversation(true);
 
     try {
       await startDanaConversation();
-      setConversationStatus("Conversación iniciada en DANA.");
-      setIsPreview(true);
+      setConversationStatus("Registro completado. Conversación iniciada en DANA.");
     } catch (error) {
       console.error("Error iniciando conversación en DANA", error);
       setConversationStatus("");
       setConversationError(
         "No se pudo iniciar la conversación en DANA. Revisa conexión o credenciales."
       );
+    } finally {
+      setIsSendingConversation(false);
     }
   };
 
   const goToHomeStart = () => {
     stopAllCameras();
+    setConversationStatus("");
+    setConversationError("");
     setIsPreview(false);
     setRegistrationStep(1);
     setIsIntro(true);
@@ -1350,12 +1403,6 @@ function Home({ amplifyOutputs }) {
                   >
                     Salir
                   </button>
-                  {conversationStatus ? (
-                    <p className="mt-3 text-xs text-[#0f8c46]">{conversationStatus}</p>
-                  ) : null}
-                  {conversationError ? (
-                    <p className="mt-2 text-xs text-[#b42318]">{conversationError}</p>
-                  ) : null}
                 </div>
               </form>
             </div>
@@ -1377,26 +1424,7 @@ function Home({ amplifyOutputs }) {
 
   const handleDownloadPkpass = async () => {
     try {
-      const photo =
-        photoDataUrl || null;
-
-      const response = await fetch(`${apiBaseUrl.replace(/\/+$/, "")}/pkpass`, {
-        method: "POST",
-        headers: {
-          "Content-Type": "application/json"
-        },
-        body: JSON.stringify({
-          name: displayName,
-          email: displayEmail,
-          photoDataUrl: photo
-        })
-      });
-
-      if (!response.ok) {
-        throw new Error("No se pudo generar el archivo .pkpass");
-      }
-
-      const blob = await response.blob();
+      const blob = await buildPkpassBlob();
       const url = window.URL.createObjectURL(blob);
       const a = document.createElement("a");
       a.href = url;
@@ -1502,16 +1530,34 @@ function Home({ amplifyOutputs }) {
           <div className="mt-7 space-y-3">
             <button
               type="button"
+              onClick={handleCompleteRegistration}
+              disabled={isSendingConversation}
+              className="inline-block min-w-64 px-8 py-3 rounded-[20px] bg-[#0b63ce] hover:bg-[#0a57b3] active:bg-[#084a98] text-white text-base font-bold shadow-sm transition-colors focus:outline-none focus:ring-2 focus:ring-[#0b63ce] focus:ring-offset-2 focus:ring-offset-white disabled:opacity-70"
+            >
+              {isSendingConversation ? "Enviando..." : "Registro completado (Enviar a DANA)"}
+            </button>
+
+            <button
+              type="button"
               onClick={handleDownloadPkpass}
               className="inline-block min-w-64 px-8 py-3 rounded-[20px] bg-[#12a150] hover:bg-[#0f8c46] active:bg-[#0b7439] text-white text-base font-bold shadow-sm transition-colors focus:outline-none focus:ring-2 focus:ring-[#12a150] focus:ring-offset-2 focus:ring-offset-white"
             >
               Descargar carnet (.pkpass)
             </button>
 
+            {conversationStatus ? (
+              <p className="text-xs text-[#0f8c46]">{conversationStatus}</p>
+            ) : null}
+            {conversationError ? (
+              <p className="text-xs text-[#b42318]">{conversationError}</p>
+            ) : null}
+
             <div>
               <button
                 type="button"
                 onClick={() => {
+                  setConversationStatus("");
+                  setConversationError("");
                   setIsPreview(false);
                 }}
                 className="text-sm text-[#3864d9] underline hover:text-[#2d56c8]"
