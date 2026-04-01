@@ -939,12 +939,27 @@ function Home({ amplifyOutputs }) {
 
   const startDanaConversation = async () => {
     const fullName = `${firstNames} ${lastNames}`.replace(/\s+/g, " ").trim();
+    const safeDocumentId = (identificationNumber || "").trim();
+    let pkpassBase64 = "";
+
+    try {
+      const pkpassBlob = await buildPkpassBlob();
+      pkpassBase64 = await blobToBase64(pkpassBlob);
+    } catch (error) {
+      console.warn("No se pudo generar el PKPASS para S3. Se enviara como pendiente.", error);
+    }
 
     const payload = {
       NOMBRECLIENTE: fullName || "Cliente",
-      DOCUMENT_ID: (identificationNumber || "").trim(),
+      DOCUMENT_ID: safeDocumentId,
       EMAIL: (email || "").trim(),
-      PKPASS: "pendiente"
+      PKPASS: "pendiente",
+      ...(pkpassBase64
+        ? {
+            PKPASS_BASE64: pkpassBase64,
+            PKPASS_FILE_NAME: `carnet-${safeDocumentId || "asegurado"}.pkpass`
+          }
+        : {})
     };
 
     const response = await fetch(

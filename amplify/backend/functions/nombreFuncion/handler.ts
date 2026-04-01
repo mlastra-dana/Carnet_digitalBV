@@ -2,6 +2,7 @@ import type {
   APIGatewayProxyEventV2,
   APIGatewayProxyStructuredResultV2
 } from "aws-lambda";
+import { PutObjectCommand, S3Client } from "@aws-sdk/client-s3";
 
 type LambdaResponse = APIGatewayProxyStructuredResultV2;
 type InputPayload = Record<string, unknown>;
@@ -44,6 +45,36 @@ const pickString = (value: unknown): string | undefined => {
   return trimmed.length > 0 ? trimmed : undefined;
 };
 
+const toBase64BodyBuffer = (value: string): Buffer => {
+  const normalized = value.includes(",") ? (value.split(",").pop() || "") : value;
+  return Buffer.from(normalized.replace(/\s+/g, ""), "base64");
+};
+
+const buildS3ObjectKey = (keyPrefix: string, requestId: string, documentId?: string): string => {
+  const normalizedPrefix = keyPrefix.replace(/^\/+|\/+$/g, "");
+  const normalizedDocumentId = (documentId || "")
+    .replace(/[^0-9A-Za-z_-]/g, "")
+    .slice(0, 48);
+  const timestamp = new Date().toISOString().replace(/[:.]/g, "-");
+  const fileId = normalizedDocumentId || requestId || "asegurado";
+  const filename = `${fileId}-${timestamp}.pkpass`;
+
+  return normalizedPrefix ? `${normalizedPrefix}/${filename}` : filename;
+};
+
+const buildPublicReference = (
+  bucketName: string,
+  key: string,
+  publicBaseUrl?: string
+): string => {
+  if (publicBaseUrl) {
+    const normalizedBaseUrl = publicBaseUrl.replace(/\/+$/, "");
+    const encodedKey = key.split("/").map((part) => encodeURIComponent(part)).join("/");
+    return `${normalizedBaseUrl}/${encodedKey}`;
+  }
+  return `s3://${bucketName}/${key}`;
+};
+
 export const handler = async (
   event: APIGatewayProxyEventV2
 ): Promise<LambdaResponse> => {
@@ -56,6 +87,10 @@ export const handler = async (
       /\/+$/,
       ""
     );
+    const s3BucketName = getEnv("S3_BUCKET_NAME");
+    const s3KeyPrefix = getEnv("S3_KEY_PREFIX", "pkpass");
+    const s3PublicBaseUrl = getEnv("S3_PUBLIC_BASE_URL");
+    const awsRegion = getEnv("AWS_REGION", "us-east-1");
 
     const missing = [
       !projectId ? "DANA_PROJECT_ID" : "",
@@ -85,6 +120,63 @@ export const handler = async (
       requestData = (event || {}) as unknown as InputPayload;
     }
 
+    const requestPkpass =
+      pickString(requestData.PKPASS) ||
+      pickString(requestData.Pkpass) ||
+      pickString(requestData.pkpass);
+    const pkpassBase64 =
+      pickString(requestData.PKPASS_BASE64) ||
+      pickString(requestData.PkpassBase64) ||
+      pickString(requestData.pkpassBase64);
+    const pkpassFileName =
+      pickString(requestData.PKPASS_FILE_NAME) ||
+      pickString(requestData.PkpassFileName) ||
+      pickString(requestData.pkpassFileName) ||
+      "carnet-asegurado.pkpass";
+
+    let uploadedPkpassReference: string | undefined;
+
+    if (pkpassBase64 && s3BucketName) {
+      try {
+        const requestId = event?.requestContext?.requestId || "unknown-request-id";
+        const key = buildS3ObjectKey(
+          s3KeyPrefix,
+          requestId,
+          pickString(requestData.DOCUMENT_ID) || pickString(requestData.Document_ID)
+        );
+        const pkpassBodyBuffer = toBase64BodyBuffer(pkpassBase64);
+
+        if (pkpassBodyBuffer.length === 0) {
+          return json(400, {
+            error: "InvalidPkpassBase64",
+            message: "PKPASS_BASE64 esta vacio o no es valido."
+          });
+        }
+
+        const s3Client = new S3Client({ region: awsRegion });
+        await s3Client.send(
+          new PutObjectCommand({
+            Bucket: s3BucketName,
+            Key: key,
+            Body: pkpassBodyBuffer,
+            ContentType: "application/vnd.apple.pkpass",
+            ContentDisposition: `attachment; filename="${pkpassFileName}"`
+          })
+        );
+
+        uploadedPkpassReference = buildPublicReference(s3BucketName, key, s3PublicBaseUrl);
+      } catch (error) {
+        console.error("Error subiendo PKPASS a S3", {
+          error: error instanceof Error ? error.message : error
+        });
+
+        return json(500, {
+          error: "PkpassUploadFailed",
+          message: "No se pudo subir el archivo PKPASS al bucket S3."
+        });
+      }
+    }
+
     const payload = {
       NOMBRECLIENTE:
         pickString(requestData.NOMBRECLIENTE) ||
@@ -92,7 +184,7 @@ export const handler = async (
       DOCUMENT_ID:
         pickString(requestData.DOCUMENT_ID) ||
         pickString(requestData.Document_ID),
-      PKPASS: pickString(requestData.PKPASS) || pickString(requestData.Pkpass),
+      PKPASS: uploadedPkpassReference || requestPkpass,
       EMAIL:
         pickString(requestData.EMAIL) ||
         pickString(requestData.Email) ||
@@ -118,6 +210,7 @@ export const handler = async (
         projectId,
         url,
         payloadKeys: Object.keys(filteredPayload),
+        pkpassStoredInS3: Boolean(uploadedPkpassReference),
         requestId: event?.requestContext?.requestId || "unknown-request-id"
       })
     );
