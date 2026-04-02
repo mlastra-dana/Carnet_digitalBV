@@ -26,6 +26,7 @@ function Home({ amplifyOutputs }) {
   const [conversationStatus, setConversationStatus] = useState("");
   const [conversationError, setConversationError] = useState("");
   const [isSendingConversation, setIsSendingConversation] = useState(false);
+  const [conversationSent, setConversationSent] = useState(false);
   const [showBackPreview, setShowBackPreview] = useState(false);
 
   const portraitVideoRef = useRef(null);
@@ -452,19 +453,49 @@ function Home({ amplifyOutputs }) {
     return canvasToBlob(canvas, "image/jpeg", 0.9);
   };
 
+  const resizeImageDataUrlForOcr = async (
+    dataUrl,
+    maxSide = 1800,
+    quality = 0.9
+  ) => {
+    const image = await loadImageFromDataUrl(dataUrl);
+    const originalWidth = image.naturalWidth || image.width || 1;
+    const originalHeight = image.naturalHeight || image.height || 1;
+    const largestSide = Math.max(originalWidth, originalHeight);
+    const scale = largestSide > maxSide ? maxSide / largestSide : 1;
+
+    const targetWidth = Math.max(1, Math.round(originalWidth * scale));
+    const targetHeight = Math.max(1, Math.round(originalHeight * scale));
+
+    const canvas = document.createElement("canvas");
+    canvas.width = targetWidth;
+    canvas.height = targetHeight;
+    const context = canvas.getContext("2d");
+    if (!context) {
+      throw new Error("No se pudo preparar la imagen para validación.");
+    }
+
+    context.imageSmoothingEnabled = true;
+    context.imageSmoothingQuality = "high";
+    context.drawImage(image, 0, 0, targetWidth, targetHeight);
+    return canvasToBlob(canvas, "image/jpeg", quality);
+  };
+
   const getOcrInputFromFile = async (file) => {
     const isPdf =
       file?.type === "application/pdf" || file?.name?.toLowerCase().endsWith(".pdf");
 
     if (!isPdf) {
       const previewDataUrl = await blobToDataUrl(file);
-      const enhanced = await preprocessImageDataUrlForOcr(previewDataUrl);
+      const resizedBlob = await resizeImageDataUrlForOcr(previewDataUrl);
+      const resizedDataUrl = await blobToDataUrl(resizedBlob);
+      const enhanced = await preprocessImageDataUrlForOcr(resizedDataUrl);
       return {
         sourceLabel: "imagen",
         previewDataUrl,
         ocrCandidates: [
           { input: enhanced, label: "imagen optimizada" },
-          { input: file, label: "imagen original" }
+          { input: resizedBlob, label: "imagen ajustada" }
         ]
       };
     }
@@ -504,6 +535,54 @@ function Home({ amplifyOutputs }) {
         { input: renderedBlob, label: "pdf original" }
       ]
     };
+  };
+
+  const normalizeNetworkMessage = (message, fallbackMessage) => {
+    const raw = (message || "").toString().trim();
+    if (!raw) return fallbackMessage;
+    if (/failed to fetch|network\s?error|load failed|network request failed/i.test(raw)) {
+      return fallbackMessage;
+    }
+    return raw;
+  };
+
+  const getOcrApiCandidates = () => {
+    const candidates = [
+      (import.meta.env.VITE_OCR_API_URL || "").toString(),
+      (import.meta.env.VITE_PKPASS_API_URL || "").toString(),
+      (import.meta.env.VITE_API_URL || "").toString(),
+      "http://localhost:3001"
+    ]
+      .map((value) => value.trim().replace(/\/+$/, ""))
+      .filter(Boolean);
+    return [...new Set(candidates)];
+  };
+
+  const postOcrWithFallback = async (payload) => {
+    const candidates = getOcrApiCandidates();
+    let lastError = null;
+
+    for (let i = 0; i < candidates.length; i += 1) {
+      const baseUrl = candidates[i];
+      try {
+        return await fetch(`${baseUrl}/ocr-id`, {
+          method: "POST",
+          headers: {
+            "Content-Type": "application/json"
+          },
+          body: JSON.stringify(payload)
+        });
+      } catch (error) {
+        lastError = error;
+      }
+    }
+
+    throw new Error(
+      normalizeNetworkMessage(
+        lastError?.message,
+        "No se pudo conectar con el servicio de validación."
+      )
+    );
   };
 
   const loadImageFromDataUrl = (dataUrl) =>
@@ -884,15 +963,9 @@ function Home({ amplifyOutputs }) {
         setOcrStatus(`Validando ${candidate.label}...`);
         try {
           const candidateDataUrl = await blobToDataUrl(candidate.input);
-          const response = await fetch(`${getOcrApiBaseUrl()}/ocr-id`, {
-            method: "POST",
-            headers: {
-              "Content-Type": "application/json"
-            },
-            body: JSON.stringify({
-              imageBase64: candidateDataUrl,
-              sourceLabel: `${sourceLabel} - ${candidate.label}`
-            })
+          const response = await postOcrWithFallback({
+            imageBase64: candidateDataUrl,
+            sourceLabel: `${sourceLabel} - ${candidate.label}`
           });
 
           if (!response.ok) {
@@ -924,14 +997,16 @@ function Home({ amplifyOutputs }) {
             score
           });
         } catch (attemptError) {
-          attemptErrors.push(
-            `${candidate.label}: ${attemptError?.message || "Error de validación del documento."}`
+          const userMessage = normalizeNetworkMessage(
+            attemptError?.message,
+            "No se pudo validar el documento."
           );
+          attemptErrors.push(userMessage);
         }
       }
 
       if (attempts.length === 0) {
-        throw new Error(attemptErrors[0] || "No se pudo validar el documento.");
+        throw new Error("No se pudo validar el documento. Intenta con una foto más nítida.");
       }
 
       const bestAttempt = attempts.sort((a, b) => b.score - a.score)[0];
@@ -999,8 +1074,6 @@ function Home({ amplifyOutputs }) {
 
   const getPkpassApiBaseUrl = () =>
     (import.meta.env.VITE_PKPASS_API_URL || apiBaseUrl).replace(/\/+$/, "");
-  const getOcrApiBaseUrl = () =>
-    (import.meta.env.VITE_OCR_API_URL || getPkpassApiBaseUrl()).replace(/\/+$/, "");
 
   const buildPkpassBlob = async () => {
     const fullName = `${firstNames} ${lastNames}`.replace(/\s+/g, " ").trim();
@@ -1071,16 +1144,26 @@ function Home({ amplifyOutputs }) {
       PKPASS_FILE_NAME: `carnet-${safeDocumentId || "asegurado"}.pkpass`
     };
 
-    const response = await fetch(
-      `${apiBaseUrl.replace(/\/+$/, "")}/start-conversation`,
-      {
+    const targetUrl = `${apiBaseUrl.replace(/\/+$/, "")}/start-conversation`;
+    let response;
+    try {
+      response = await fetch(targetUrl, {
         method: "POST",
         headers: {
           "Content-Type": "application/json"
         },
         body: JSON.stringify(payload)
-      }
-    );
+      });
+    } catch (networkError) {
+      await new Promise((resolve) => setTimeout(resolve, 500));
+      response = await fetch(targetUrl, {
+        method: "POST",
+        headers: {
+          "Content-Type": "application/json"
+        },
+        body: JSON.stringify(payload)
+      });
+    }
 
     if (!response.ok) {
       throw new Error("No se pudo iniciar la conversación en DANA.");
@@ -1090,6 +1173,7 @@ function Home({ amplifyOutputs }) {
   const handleFinishRegistration = () => {
     setConversationStatus("");
     setConversationError("");
+    setConversationSent(false);
     setShowBackPreview(false);
     setIsPreview(true);
   };
@@ -1097,11 +1181,13 @@ function Home({ amplifyOutputs }) {
   const handleCompleteRegistration = async () => {
     setConversationStatus("Enviando datos a DANA...");
     setConversationError("");
+    setConversationSent(false);
     setIsSendingConversation(true);
 
     try {
       await startDanaConversation();
-      setConversationStatus("");
+      setConversationStatus("Carnet enviado. Revise su correo electrónico.");
+      setConversationSent(true);
     } catch (error) {
       console.error("Error iniciando conversación en DANA", error);
       setConversationStatus("");
@@ -1109,6 +1195,7 @@ function Home({ amplifyOutputs }) {
         error?.message ||
           "No se pudo iniciar la conversación en DANA. Revisa conexión o credenciales."
       );
+      setConversationSent(false);
     } finally {
       setIsSendingConversation(false);
     }
@@ -1118,6 +1205,7 @@ function Home({ amplifyOutputs }) {
     stopAllCameras();
     setConversationStatus("");
     setConversationError("");
+    setConversationSent(false);
     setShowBackPreview(false);
     setIsPreview(false);
     setRegistrationStep(1);
@@ -1475,22 +1563,6 @@ function Home({ amplifyOutputs }) {
       .toString()
       .trim();
 
-  const handleDownloadPkpass = async () => {
-    try {
-      const blob = await buildPkpassBlob();
-      const url = window.URL.createObjectURL(blob);
-      const a = document.createElement("a");
-      a.href = url;
-      a.download = "carnet-asegurado.pkpass";
-      document.body.appendChild(a);
-      a.click();
-      a.remove();
-      window.URL.revokeObjectURL(url);
-    } catch (error) {
-      console.error(error);
-    }
-  };
-
   return (
     <div className="min-h-screen bg-[#f3f3f3] text-[#394c6c] px-4 py-8 sm:py-12">
       <div className="mx-auto max-w-5xl rounded-[22px] border border-[#d9e3fb] bg-white shadow-[0_22px_50px_rgba(13,51,140,0.18)] overflow-hidden">
@@ -1618,30 +1690,33 @@ function Home({ amplifyOutputs }) {
             <button
               type="button"
               onClick={handleCompleteRegistration}
-              disabled={isSendingConversation}
+              disabled={isSendingConversation || conversationSent}
               className="inline-block min-w-64 px-8 py-3 rounded-[20px] bg-[#0b63ce] hover:bg-[#0a57b3] active:bg-[#084a98] text-white text-base font-bold shadow-sm transition-colors focus:outline-none focus:ring-2 focus:ring-[#0b63ce] focus:ring-offset-2 focus:ring-offset-white disabled:opacity-70"
             >
-              {isSendingConversation ? "Enviando..." : "Registro completado (Enviar a DANA)"}
-            </button>
-
-            <button
-              type="button"
-              onClick={handleDownloadPkpass}
-              className="inline-block min-w-64 px-8 py-3 rounded-[20px] bg-[#12a150] hover:bg-[#0f8c46] active:bg-[#0b7439] text-white text-base font-bold shadow-sm transition-colors focus:outline-none focus:ring-2 focus:ring-[#12a150] focus:ring-offset-2 focus:ring-offset-white"
-            >
-              Descargar carnet (.pkpass)
+              {isSendingConversation
+                ? "Enviando..."
+                : conversationSent
+                  ? "Carnet enviado"
+                  : "Finalizar registro"}
             </button>
 
             {conversationError ? (
               <p className="text-xs text-[#b42318]">{conversationError}</p>
             ) : null}
 
-            <div>
+            {conversationSent ? (
+              <p className="text-sm text-[#117a44] font-semibold">
+                Carnet enviado. Revise su correo electrónico.
+              </p>
+            ) : null}
+
+            <div className={conversationSent ? "hidden" : ""}>
               <button
                 type="button"
                 onClick={() => {
                   setConversationStatus("");
                   setConversationError("");
+                  setConversationSent(false);
                   setShowBackPreview(false);
                   setIsPreview(false);
                 }}
