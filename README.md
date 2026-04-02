@@ -49,9 +49,13 @@ Opcionalmente puedes definir `VITE_API_URL` en un archivo `.env`:
 
 ```env
 VITE_API_URL=http://localhost:3001
+VITE_OCR_API_URL=http://localhost:3001
+VITE_PKPASS_CONTACT_URL=https://wa.me/59100000000
 ```
 
 Si no defines `VITE_API_URL`, el frontend usará `window.location.origin` como base y, si el backend no existe, mostrará errores legibles y datos mock.
+
+`VITE_PKPASS_CONTACT_URL` se usa para agregar un link de contacto en el reverso del `.pkpass`.
 
 ## Cómo funciona el endpoint `/ping`
 
@@ -136,4 +140,3 @@ Partes preparadas para conectar cuando tengas credenciales de AWS:
 - Hooks y servicios frontend (`usePing`, `apiClient`) que usan `VITE_API_URL` y/o `apiUrl` de Amplify.
 
 Mientras tanto, la app funciona como una SPA React standalone, con endpoint `/ping` mock/local.
-

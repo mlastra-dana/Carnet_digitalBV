@@ -25,6 +25,53 @@ function buildQrDemoMessage(name, email) {
   return `LBC-DEMO|${safeName}|${safeEmail}|CARNET-DIGITAL`;
 }
 
+function escapeHtml(value) {
+  return (value || "")
+    .replace(/&/g, "&amp;")
+    .replace(/</g, "&lt;")
+    .replace(/>/g, "&gt;")
+    .replace(/"/g, "&quot;")
+    .replace(/'/g, "&#39;");
+}
+
+function sanitizeContactUrl(rawUrl) {
+  const input = (rawUrl || "").toString().trim();
+  if (!input) return "";
+  if (/^https?:\/\//i.test(input) || /^mailto:/i.test(input) || /^tel:/i.test(input)) {
+    return input;
+  }
+  return `https://${input}`;
+}
+
+function applyContactBackField(pass, contactUrlInput) {
+  if (!pass.eventTicket) return;
+  const contactUrl = sanitizeContactUrl(contactUrlInput || process.env.PKPASS_CONTACT_URL);
+  if (!contactUrl) return;
+
+  const safeHref = escapeHtml(contactUrl);
+  const contactField = {
+    key: "contacto",
+    label: "contacto",
+    value: contactUrl,
+    attributedValue: `<a href="${safeHref}">contacto</a>`
+  };
+
+  if (!Array.isArray(pass.eventTicket.backFields)) {
+    pass.eventTicket.backFields = [];
+  } else {
+    pass.eventTicket.backFields = [...pass.eventTicket.backFields];
+  }
+
+  const currentIndex = pass.eventTicket.backFields.findIndex(
+    (field) => field?.key === "contacto"
+  );
+  if (currentIndex >= 0) {
+    pass.eventTicket.backFields[currentIndex] = contactField;
+  } else {
+    pass.eventTicket.backFields.push(contactField);
+  }
+}
+
 function normalizeNameText(value) {
   return (value || "")
     .replace(/[^A-Za-zÀ-ÿ\s]/g, " ")
@@ -340,6 +387,7 @@ app.get("/pkpass", async (req, res) => {
   try {
     const name = (req.query.name || "Juan Pérez").toString();
     const email = (req.query.email || "").toString();
+    const contactUrl = (req.query.contactUrl || "").toString();
 
     const passTemplateRaw = await fs.readFile(templatePassPath, "utf8");
     const passTemplate = JSON.parse(passTemplateRaw);
@@ -386,6 +434,8 @@ app.get("/pkpass", async (req, res) => {
         message: buildQrDemoMessage(name, email)
       };
     }
+
+    applyContactBackField(pass, contactUrl);
 
     res.setHeader("Content-Type", "application/vnd.apple.pkpass");
     res.setHeader(
@@ -493,6 +543,7 @@ app.post("/pkpass", async (req, res) => {
     const name = (req.body?.name || "Juan Pérez").toString();
     const email = (req.body?.email || "").toString();
     const photoDataUrl = (req.body?.photoDataUrl || "").toString();
+    const contactUrl = (req.body?.contactUrl || "").toString();
 
     const passTemplateRaw = await fs.readFile(templatePassPath, "utf8");
     const passTemplate = JSON.parse(passTemplateRaw);
@@ -564,6 +615,8 @@ app.post("/pkpass", async (req, res) => {
         message: buildQrDemoMessage(name, email)
       };
     }
+
+    applyContactBackField(pass, contactUrl);
 
     res.setHeader("Content-Type", "application/vnd.apple.pkpass");
     res.setHeader(

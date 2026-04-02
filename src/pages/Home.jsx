@@ -1003,10 +1003,12 @@ function Home({ amplifyOutputs }) {
 
   const buildPkpassBlob = async () => {
     const fullName = `${firstNames} ${lastNames}`.replace(/\s+/g, " ").trim();
+    const contactUrl = (import.meta.env.VITE_PKPASS_CONTACT_URL || "").toString().trim();
     const payload = {
       name: fullName || "Cliente",
       email: (email || "").trim(),
-      photoDataUrl: photoDataUrl || null
+      photoDataUrl: photoDataUrl || null,
+      ...(contactUrl ? { contactUrl } : {})
     };
 
     const response = await fetch(`${getPkpassApiBaseUrl()}/pkpass`, {
