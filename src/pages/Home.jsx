@@ -26,6 +26,7 @@ function Home({ amplifyOutputs }) {
   const [conversationStatus, setConversationStatus] = useState("");
   const [conversationError, setConversationError] = useState("");
   const [isSendingConversation, setIsSendingConversation] = useState(false);
+  const [showBackPreview, setShowBackPreview] = useState(false);
 
   const portraitVideoRef = useRef(null);
   const portraitCanvasRef = useRef(null);
@@ -1085,6 +1086,7 @@ function Home({ amplifyOutputs }) {
   const handleFinishRegistration = () => {
     setConversationStatus("");
     setConversationError("");
+    setShowBackPreview(false);
     setIsPreview(true);
   };
 
@@ -1111,6 +1113,7 @@ function Home({ amplifyOutputs }) {
     stopAllCameras();
     setConversationStatus("");
     setConversationError("");
+    setShowBackPreview(false);
     setIsPreview(false);
     setRegistrationStep(1);
     setIsIntro(true);
@@ -1458,13 +1461,14 @@ function Home({ amplifyOutputs }) {
 
   const mergedDisplayName = `${firstNames} ${lastNames}`.replace(/\s+/g, " ").trim();
   const displayName = mergedDisplayName || "Juan Pérez";
-  const displayEmail = email || "juan.perez@ejemplo.com";
   const displayId = identificationNumber || "V12345678";
   const displayPolicy = `POL-${displayId.replace(/[^0-9]/g, "").slice(-6) || "000001"}`;
-  const demoQrData = `LBC|${displayId}|${displayPolicy}|${displayEmail}`;
-  const demoQrUrl = `https://api.qrserver.com/v1/create-qr-code/?size=220x220&margin=0&data=${encodeURIComponent(
-    demoQrData
-  )}`;
+  const displayPlan = "Integral";
+  const displayValidity = "31/12/2026";
+  const displayContactUrl =
+    (import.meta.env.VITE_PKPASS_CONTACT_URL || "https://wa.me/584142563325")
+      .toString()
+      .trim();
 
   const handleDownloadPkpass = async () => {
     try {
@@ -1504,13 +1508,35 @@ function Home({ amplifyOutputs }) {
           <h1 className="text-2xl font-bold text-[#22355d]">Vista previa del carnet</h1>
           <p className="text-sm text-[#5f6f8f] mt-1">Así se verá el carnet digital del asegurado.</p>
           <div className="mt-6">
+            <div className="mx-auto mb-3 inline-flex rounded-full border border-[#bfd3f7] bg-[#eef4ff] p-1">
+              <button
+                type="button"
+                onClick={() => setShowBackPreview(false)}
+                className={`px-4 py-1.5 text-xs font-semibold rounded-full transition-colors ${
+                  !showBackPreview ? "bg-[#3864d9] text-white" : "text-[#34517f] hover:bg-white"
+                }`}
+              >
+                Frente
+              </button>
+              <button
+                type="button"
+                onClick={() => setShowBackPreview(true)}
+                className={`px-4 py-1.5 text-xs font-semibold rounded-full transition-colors ${
+                  showBackPreview ? "bg-[#3864d9] text-white" : "text-[#34517f] hover:bg-white"
+                }`}
+              >
+                Reverso
+              </button>
+            </div>
             <div className="mx-auto max-w-[420px] rounded-[24px] overflow-hidden shadow-[0_20px_44px_rgba(35,87,202,0.24)] border border-[#b9ccfa] bg-gradient-to-br from-[#3559c4] via-[#2f4da9] to-[#25428f] text-white">
               <div className="px-5 pt-5 pb-4 relative">
                 <div className="absolute inset-0 opacity-20 bg-[radial-gradient(circle_at_85%_20%,#ffffff_0,transparent_40%)]" />
                 <div className="relative flex items-start justify-between gap-4">
                   <div>
                     <p className="text-[10px] uppercase tracking-[0.22em] text-white/75">LBC Seguros</p>
-                    <p className="mt-1 text-lg font-bold leading-tight">Carnet del asegurado</p>
+                    <p className="mt-1 text-lg font-bold leading-tight">
+                      {showBackPreview ? "Reverso del carnet" : "Carnet del asegurado"}
+                    </p>
                     <p className="text-[11px] text-white/80 mt-1">Seguros Digitales</p>
                   </div>
                   <div className="h-14 w-14 rounded-xl bg-white/12 border border-white/25 flex items-center justify-center text-[11px] font-semibold">
@@ -1519,54 +1545,75 @@ function Home({ amplifyOutputs }) {
                 </div>
               </div>
 
-              <div className="bg-white text-[#22355d] mx-4 rounded-[16px] border border-[#d7e3fd] p-4">
-                <div className="grid grid-cols-[1fr_92px] gap-3 items-start">
-                  <div className="min-w-0">
-                    <p className="text-[11px] uppercase tracking-[0.18em] text-[#5f6f8f]">Asegurado</p>
-                    <p className="text-[17px] font-bold leading-tight break-words">{displayName}</p>
-                    <div className="mt-3 space-y-1.5">
-                      <p className="text-xs">
-                        <span className="font-semibold">Cédula:</span> {displayId}
-                      </p>
-                      <p className="text-xs">
-                        <span className="font-semibold">Póliza:</span> {displayPolicy}
-                      </p>
-                      <p className="text-xs break-all">
-                        <span className="font-semibold">Email:</span> {displayEmail}
-                      </p>
+              {!showBackPreview ? (
+                <div className="bg-white text-[#22355d] mx-4 rounded-[16px] border border-[#d7e3fd] p-4">
+                  <div className="grid grid-cols-[1fr_92px] gap-3 items-start">
+                    <div className="min-w-0">
+                      <p className="text-[11px] uppercase tracking-[0.18em] text-[#5f6f8f]">Asegurado</p>
+                      <p className="text-[17px] font-bold leading-tight break-words">{displayName}</p>
+                      <div className="mt-3 space-y-1.5">
+                        <p className="text-xs">
+                          <span className="font-semibold">Cédula:</span> {displayId}
+                        </p>
+                        <p className="text-xs">
+                          <span className="font-semibold">Póliza:</span> {displayPolicy}
+                        </p>
+                        <p className="text-xs">
+                          <span className="font-semibold">Plan:</span> {displayPlan}
+                        </p>
+                        <p className="text-xs">
+                          <span className="font-semibold">Vigencia:</span> {displayValidity}
+                        </p>
+                      </div>
+                    </div>
+
+                    <div className="h-[110px] w-[92px] rounded-[12px] overflow-hidden border border-[#cfdcf8] bg-[#edf3ff]">
+                      <img
+                        src={
+                          photoDataUrl ||
+                          "https://media.istockphoto.com/id/1389348844/es/foto/foto-de-estudio-de-una-hermosa-joven-sonriendo-mientras-est%C3%A1-de-pie-sobre-un-fondo-gris.jpg?s=612x612&w=0&k=20&c=kUufmNoTnDcRbyeHhU1wRiip-fNjTWP9owjHf75frFQ="
+                        }
+                        alt="Foto del asegurado"
+                        className="w-full h-full object-cover"
+                      />
                     </div>
                   </div>
 
-                  <div className="h-[110px] w-[92px] rounded-[12px] overflow-hidden border border-[#cfdcf8] bg-[#edf3ff]">
-                    <img
-                      src={
-                        photoDataUrl ||
-                        "https://media.istockphoto.com/id/1389348844/es/foto/foto-de-estudio-de-una-hermosa-joven-sonriendo-mientras-est%C3%A1-de-pie-sobre-un-fondo-gris.jpg?s=612x612&w=0&k=20&c=kUufmNoTnDcRbyeHhU1wRiip-fNjTWP9owjHf75frFQ="
-                      }
-                      alt="Foto del asegurado"
-                      className="w-full h-full object-cover"
-                    />
+                  <div className="mt-4 rounded-[12px] border border-[#d3def9] bg-[#f5f8ff] px-3 py-2">
+                    <p className="text-[10px] uppercase tracking-[0.18em] text-[#5f6f8f]">Documento</p>
+                    <p className="text-xs font-semibold text-[#2d468f]">Carnet digital de asegurado</p>
                   </div>
                 </div>
-
-                <div className="mt-4 rounded-[12px] border border-[#d3def9] bg-[#f5f8ff] px-3 py-2">
-                  <p className="text-[10px] uppercase tracking-[0.18em] text-[#5f6f8f]">Documento</p>
-                  <p className="text-xs font-semibold text-[#2d468f]">Carnet digital de asegurado</p>
-                </div>
-
-                <div className="mt-4 rounded-[12px] border border-[#d3def9] bg-white px-3 py-3">
-                  <div className="flex items-center justify-center">
-                    <img
-                      src={demoQrUrl}
-                      alt="Código QR del carnet"
-                      className="h-24 w-24 rounded-[8px] border border-[#d3def9] bg-white"
-                    />
+              ) : (
+                <div className="bg-white text-[#22355d] mx-4 rounded-[16px] border border-[#d7e3fd] p-4">
+                  <p className="text-[11px] uppercase tracking-[0.18em] text-[#5f6f8f]">Información</p>
+                  <div className="mt-3 space-y-2 text-left">
+                    <p className="text-xs">
+                      <span className="font-semibold">Titular:</span> {displayName}
+                    </p>
+                    <p className="text-xs">
+                      <span className="font-semibold">Póliza:</span> {displayPolicy}
+                    </p>
+                    <p className="text-xs">
+                      <span className="font-semibold">Vigencia:</span> {displayValidity}
+                    </p>
+                    <p className="text-xs">
+                      <span className="font-semibold">contacto:</span>{" "}
+                      <a
+                        href={displayContactUrl}
+                        target="_blank"
+                        rel="noreferrer"
+                        className="text-[#2d56c8] underline break-all"
+                      >
+                        contacto
+                      </a>
+                    </p>
                   </div>
                 </div>
-              </div>
+              )}
 
               <div className="px-5 py-3 text-[10px] tracking-[0.14em] uppercase text-white/75">
-                Documento digital de asegurado
+                {showBackPreview ? "Reverso del carnet" : "Documento digital de asegurado"}
               </div>
             </div>
           </div>
@@ -1599,6 +1646,7 @@ function Home({ amplifyOutputs }) {
                 onClick={() => {
                   setConversationStatus("");
                   setConversationError("");
+                  setShowBackPreview(false);
                   setIsPreview(false);
                 }}
                 className="text-sm text-[#3864d9] underline hover:text-[#2d56c8]"
