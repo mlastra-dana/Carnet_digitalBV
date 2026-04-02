@@ -390,12 +390,12 @@ function Home({ amplifyOutputs }) {
     };
   };
 
-  const canvasToBlob = (canvas, type = "image/png") =>
+  const canvasToBlob = (canvas, type = "image/png", quality) =>
     new Promise((resolve, reject) => {
       canvas.toBlob((blob) => {
         if (blob) resolve(blob);
         else reject(new Error("No se pudo convertir el PDF a imagen para OCR."));
-      }, type);
+      }, type, quality);
     });
 
   const blobToDataUrl = (blob) =>
@@ -448,7 +448,7 @@ function Home({ amplifyOutputs }) {
     }
 
     context.putImageData(frame, 0, 0);
-    return canvasToBlob(canvas);
+    return canvasToBlob(canvas, "image/jpeg", 0.9);
   };
 
   const getOcrInputFromFile = async (file) => {
@@ -877,46 +877,60 @@ function Home({ amplifyOutputs }) {
       setOcrStatus("Enviando documento al servidor...");
 
       const attempts = [];
+      const attemptErrors = [];
       for (let i = 0; i < ocrCandidates.length; i += 1) {
         const candidate = ocrCandidates[i];
-        setOcrStatus(`Analizando ${candidate.label} en backend...`);
-        const candidateDataUrl = await blobToDataUrl(candidate.input);
-        const response = await fetch(`${getOcrApiBaseUrl()}/ocr-id`, {
-          method: "POST",
-          headers: {
-            "Content-Type": "application/json"
-          },
-          body: JSON.stringify({
-            imageBase64: candidateDataUrl,
-            sourceLabel: `${sourceLabel} - ${candidate.label}`
-          })
-        });
+        setOcrStatus(`Validando ${candidate.label}...`);
+        try {
+          const candidateDataUrl = await blobToDataUrl(candidate.input);
+          const response = await fetch(`${getOcrApiBaseUrl()}/ocr-id`, {
+            method: "POST",
+            headers: {
+              "Content-Type": "application/json"
+            },
+            body: JSON.stringify({
+              imageBase64: candidateDataUrl,
+              sourceLabel: `${sourceLabel} - ${candidate.label}`
+            })
+          });
 
-        if (!response.ok) {
-          const errorPayload = await response.json().catch(() => ({}));
-          const errorMessage =
-            errorPayload?.message || "No se pudo completar OCR en backend.";
-          throw new Error(errorMessage);
+          if (!response.ok) {
+            const errorPayload = await response.json().catch(() => ({}));
+            const serverMessage = (errorPayload?.message || "").toString();
+            const errorMessage =
+              serverMessage && !/backend/i.test(serverMessage)
+                ? serverMessage
+                : "No se pudo validar el documento.";
+            throw new Error(errorMessage);
+          }
+
+          const result = await response.json();
+          const extractedCount = [
+            result?.firstNamesValue,
+            result?.lastNamesValue,
+            result?.documentIdValue
+          ].filter(Boolean).length;
+          const confidence = Number(result?.confidence || 0);
+          const score = extractedCount * 100 + confidence + (i === 0 ? 10 : 0);
+          attempts.push({
+            label: candidate.label,
+            debugSample: result?.debugSample || "",
+            parsed: {
+              firstNamesValue: result?.firstNamesValue || "",
+              lastNamesValue: result?.lastNamesValue || "",
+              documentIdValue: result?.documentIdValue || ""
+            },
+            score
+          });
+        } catch (attemptError) {
+          attemptErrors.push(
+            `${candidate.label}: ${attemptError?.message || "Error de validación del documento."}`
+          );
         }
+      }
 
-        const result = await response.json();
-        const extractedCount = [
-          result?.firstNamesValue,
-          result?.lastNamesValue,
-          result?.documentIdValue
-        ].filter(Boolean).length;
-        const confidence = Number(result?.confidence || 0);
-        const score = extractedCount * 100 + confidence + (i === 0 ? 10 : 0);
-        attempts.push({
-          label: candidate.label,
-          debugSample: result?.debugSample || "",
-          parsed: {
-            firstNamesValue: result?.firstNamesValue || "",
-            lastNamesValue: result?.lastNamesValue || "",
-            documentIdValue: result?.documentIdValue || ""
-          },
-          score
-        });
+      if (attempts.length === 0) {
+        throw new Error(attemptErrors[0] || "No se pudo validar el documento.");
       }
 
       const bestAttempt = attempts.sort((a, b) => b.score - a.score)[0];
