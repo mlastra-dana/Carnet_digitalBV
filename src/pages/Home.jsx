@@ -1191,7 +1191,7 @@ function Home({ amplifyOutputs }) {
               <div className="relative">
                 <img src={logoUrl} alt="LBC Seguros" className="h-14 w-auto object-contain" />
                 <p className="mt-10 text-xs uppercase tracking-[0.2em] text-white/70">
-                  Seguros Digitales
+                  LBC Seguros
                 </p>
                 <h1 className="mt-3 text-3xl sm:text-4xl font-bold leading-tight">
                   Carnet del asegurado
@@ -1490,9 +1490,7 @@ function Home({ amplifyOutputs }) {
     <div className="min-h-screen bg-[#f3f3f3] text-[#394c6c] px-4 py-8 sm:py-12">
       <div className="mx-auto max-w-5xl rounded-[22px] border border-[#d9e3fb] bg-white shadow-[0_22px_50px_rgba(13,51,140,0.18)] overflow-hidden">
         <div className="h-16 bg-[#3864d9] flex items-center justify-center">
-          <p className="text-sm uppercase tracking-[0.22em] text-white font-bold">
-            Seguros Digitales
-          </p>
+          <p className="text-sm uppercase tracking-[0.22em] text-white font-bold">LBC Seguros</p>
         </div>
 
         <div className="p-6 sm:p-8 text-center">
@@ -1537,7 +1535,6 @@ function Home({ amplifyOutputs }) {
                     <p className="mt-1 text-lg font-bold leading-tight">
                       {showBackPreview ? "Reverso del carnet" : "Carnet del asegurado"}
                     </p>
-                    <p className="text-[11px] text-white/80 mt-1">Seguros Digitales</p>
                   </div>
                   <div className="h-14 w-14 rounded-xl bg-white/12 border border-white/25 flex items-center justify-center text-[11px] font-semibold">
                     LBC
@@ -1608,6 +1605,7 @@ function Home({ amplifyOutputs }) {
                 </div>
               )}
 
+              <div className="px-5 py-3" aria-hidden="true" />
             </div>
           </div>
 
