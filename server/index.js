@@ -6,6 +6,7 @@ const os = require("node:os");
 const crypto = require("node:crypto");
 const { execFile } = require("node:child_process");
 const archiver = require("archiver");
+const { recognize } = require("tesseract.js");
 const { handler: helloWorld } = require("../amplify/backend/functions/helloWorld/index.js");
 
 const app = express();
@@ -14,7 +15,7 @@ const port = process.env.PORT || 3001;
 app.use(cors());
 app.use(
   express.json({
-    limit: "5mb"
+    limit: "20mb"
   })
 );
 
@@ -22,6 +23,168 @@ function buildQrDemoMessage(name, email) {
   const safeName = (name || "ASEGURADO").toString().trim();
   const safeEmail = (email || "sin-email").toString().trim();
   return `LBC-DEMO|${safeName}|${safeEmail}|CARNET-DIGITAL`;
+}
+
+function normalizeNameText(value) {
+  return (value || "")
+    .replace(/[^A-Za-zÀ-ÿ\s]/g, " ")
+    .replace(/\s+/g, " ")
+    .trim();
+}
+
+function cleanBoliviaNameValue(value, maxWords = 4) {
+  const cleaned = normalizeNameText((value || "").split(/[|><]/)[0] || "")
+    .toUpperCase()
+    .replace(/\s+/g, " ")
+    .trim();
+
+  const noiseWords = new Set([
+    "ESTADO",
+    "PLURINACIONAL",
+    "BOLIVIA",
+    "SERVICIO",
+    "GENERAL",
+    "IDENTIFICACION",
+    "PERSONAL",
+    "NACIMIENTO",
+    "NACIONALIDAD",
+    "FIRMA",
+    "TITULAR",
+    "CARNET",
+    "IDENTIDAD",
+    "APELLIDO",
+    "APELLIDOS",
+    "NOMBRE",
+    "NOMBRES",
+    "CI",
+    "SEGIP",
+    "NUMERO",
+    "DOCUMENTO"
+  ]);
+
+  return cleaned
+    .split(" ")
+    .filter((word) => word && !noiseWords.has(word))
+    .slice(0, maxWords)
+    .join(" ")
+    .trim();
+}
+
+function extractLabeledBoliviaField(lines, labels, maxWords = 3) {
+  for (let index = 0; index < lines.length; index += 1) {
+    const line = lines[index];
+    const lineUpper = line.toUpperCase();
+    const matchedLabel = labels.find((label) => lineUpper.includes(label));
+    if (!matchedLabel) continue;
+
+    const inline = line
+      .replace(new RegExp(`.*${matchedLabel}\\s*[:\\-]?\\s*`, "i"), "")
+      .trim();
+    const cleanInline = cleanBoliviaNameValue(inline, maxWords);
+    if (cleanInline) return cleanInline;
+
+    const nextLine = cleanBoliviaNameValue(lines[index + 1] || "", maxWords);
+    if (nextLine) return nextLine;
+  }
+  return "";
+}
+
+function formatBoliviaDocumentId(digits, complement, expedition) {
+  if (!digits) return "";
+  const normalizedComplement = (complement || "").replace(/[^0-9A-Z]/gi, "").toUpperCase();
+  const normalizedExpedition = (expedition || "").replace(/[^A-Z]/gi, "").toUpperCase();
+  return [
+    `${digits}${normalizedComplement ? `-${normalizedComplement}` : ""}`,
+    normalizedExpedition
+  ]
+    .filter(Boolean)
+    .join(" ")
+    .trim();
+}
+
+function extractBoliviaDocumentId(lines) {
+  const joinedText = lines.join(" ");
+  const labelFocusedText = lines
+    .filter((line) =>
+      /(C[.\s]?I\b|CARNET|NRO|Nº|N°|NUMERO|DOCUMENTO|IDENTIDAD)/i.test(line)
+    )
+    .join(" ");
+  const searchText = `${labelFocusedText} ${joinedText}`.trim();
+  const docRegex =
+    /\b([0-9]{5,10})(?:\s*[-.]\s*([0-9A-Z]{1,3}))?(?:\s+(LP|CB|SC|OR|PT|CH|TJ|BE|PD))?\b/gi;
+
+  let bestMatch = null;
+  let currentMatch = docRegex.exec(searchText);
+  while (currentMatch) {
+    const digits = (currentMatch[1] || "").replace(/\D/g, "");
+    const complement = (currentMatch[2] || "").toUpperCase();
+    const expedition = (currentMatch[3] || "").toUpperCase();
+    if (digits.length >= 5 && digits.length <= 10) {
+      if (!bestMatch || digits.length > bestMatch.digits.length) {
+        bestMatch = { digits, complement, expedition };
+      }
+    }
+    currentMatch = docRegex.exec(searchText);
+  }
+
+  if (!bestMatch) return "";
+  return formatBoliviaDocumentId(bestMatch.digits, bestMatch.complement, bestMatch.expedition);
+}
+
+function parseBoliviaIdCardData(ocrText) {
+  const lines = (ocrText || "")
+    .split("\n")
+    .map((line) => line.replace(/\s+/g, " ").trim())
+    .filter(Boolean);
+
+  const apellidoPaterno = extractLabeledBoliviaField(
+    lines,
+    ["APELLIDO PATERNO", "PRIMER APELLIDO"],
+    2
+  );
+  const apellidoMaterno = extractLabeledBoliviaField(
+    lines,
+    ["APELLIDO MATERNO", "SEGUNDO APELLIDO"],
+    2
+  );
+  const genericLastNames = extractLabeledBoliviaField(lines, ["APELLIDOS", "APELLIDO"], 3);
+  let lastNamesValue = [apellidoPaterno, apellidoMaterno].filter(Boolean).join(" ").trim();
+  if (!lastNamesValue) {
+    lastNamesValue = genericLastNames;
+  }
+
+  let firstNamesValue = extractLabeledBoliviaField(lines, ["NOMBRES", "NOMBRE"], 3);
+
+  if (!firstNamesValue || !lastNamesValue) {
+    const candidateLines = lines
+      .map((line) => cleanBoliviaNameValue(line, 3))
+      .filter((line) => line.split(" ").length >= 2);
+    if (!lastNamesValue && candidateLines[0]) {
+      lastNamesValue = candidateLines[0].split(" ").slice(0, 2).join(" ");
+    }
+    if (!firstNamesValue && candidateLines[1]) {
+      firstNamesValue = candidateLines[1];
+    }
+  }
+
+  const documentIdValue = extractBoliviaDocumentId(lines);
+
+  return {
+    firstNamesValue,
+    lastNamesValue,
+    documentIdValue
+  };
+}
+
+function decodeDataUrlToBuffer(dataUrl) {
+  if (!dataUrl || typeof dataUrl !== "string") {
+    throw new Error("Imagen vacía.");
+  }
+  const matched = dataUrl.match(/^data:(.+);base64,(.+)$/);
+  if (!matched?.[2]) {
+    throw new Error("Formato de imagen inválido. Se esperaba data URL base64.");
+  }
+  return Buffer.from(matched[2], "base64");
 }
 
 async function createSignedPkpass({
@@ -270,6 +433,55 @@ app.get("/pkpass", async (req, res) => {
     } else {
       res.end();
     }
+  }
+});
+
+app.post("/ocr-id", async (req, res) => {
+  try {
+    const imageBase64 = (req.body?.imageBase64 || "").toString();
+    const sourceLabel = (req.body?.sourceLabel || "documento").toString();
+    if (!imageBase64) {
+      res.status(400).json({ message: "Debes enviar imageBase64 en formato data URL." });
+      return;
+    }
+
+    const imageBuffer = decodeDataUrlToBuffer(imageBase64);
+
+    const ocrResult = await Promise.race([
+      recognize(imageBuffer, "spa+eng"),
+      new Promise((_, reject) =>
+        setTimeout(() => reject(new Error("OCR demoró demasiado tiempo.")), 45000)
+      )
+    ]);
+
+    const ocrText = (ocrResult?.data?.text || "").trim();
+    if (!ocrText) {
+      res.status(422).json({ message: "OCR no detectó texto legible en el documento." });
+      return;
+    }
+
+    const parsed = parseBoliviaIdCardData(ocrText);
+    const debugSample = ocrText
+      .split("\n")
+      .map((line) => line.trim())
+      .filter(Boolean)
+      .slice(0, 4)
+      .join(" | ");
+
+    res.json({
+      sourceLabel,
+      firstNamesValue: parsed.firstNamesValue || "",
+      lastNamesValue: parsed.lastNamesValue || "",
+      documentIdValue: parsed.documentIdValue || "",
+      confidence: Number(ocrResult?.data?.confidence || 0),
+      debugSample
+    });
+  } catch (error) {
+    console.error("Error en /ocr-id", error);
+    res.status(500).json({
+      message: "No se pudo procesar OCR en backend.",
+      error: error instanceof Error ? error.message : String(error)
+    });
   }
 });
 

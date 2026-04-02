@@ -14,7 +14,6 @@ function Home({ amplifyOutputs }) {
   const [isReadingId, setIsReadingId] = useState(false);
   const [idReadError, setIdReadError] = useState("");
   const [idReadSuccess, setIdReadSuccess] = useState("");
-  const [idReadDebug, setIdReadDebug] = useState("");
   const [idFileName, setIdFileName] = useState("");
   const [idDocumentImageDataUrl, setIdDocumentImageDataUrl] = useState("");
   const [ocrStatus, setOcrStatus] = useState("");
@@ -867,75 +866,72 @@ function Home({ amplifyOutputs }) {
 
     setIdReadError("");
     setIdReadSuccess("");
-    setIdReadDebug("");
     setOcrStatus("Preparando análisis del documento...");
     setIdFileName(file.name || "");
     resetLivenessState();
     setIsReadingId(true);
 
     try {
-      const tesseractModule = await import("tesseract.js");
-      const recognize =
-        tesseractModule?.recognize || tesseractModule?.default?.recognize;
-
-      if (!recognize) {
-        throw new Error("No se pudo inicializar OCR en el navegador.");
-      }
-
       const { ocrCandidates, sourceLabel, previewDataUrl } = await getOcrInputFromFile(file);
       setIdDocumentImageDataUrl(previewDataUrl || "");
-      const toSpanishStatus = (status) => {
-        const normalized = (status || "").toLowerCase();
-        if (normalized.includes("loading")) return "Cargando motor OCR...";
-        if (normalized.includes("initial")) return "Inicializando análisis...";
-        if (normalized.includes("recogn")) return "Analizando documento...";
-        if (normalized.includes("resolv")) return "Procesando resultados...";
-        return "Analizando documento...";
-      };
+      setOcrStatus("Enviando documento al servidor...");
 
       const attempts = [];
       for (let i = 0; i < ocrCandidates.length; i += 1) {
         const candidate = ocrCandidates[i];
-        const result = await recognize(candidate.input, "spa+eng", {
-          logger: (message) => {
-            const nextStatus = (message?.status || "").toString();
-            if (nextStatus) setOcrStatus(toSpanishStatus(nextStatus));
-          }
+        setOcrStatus(`Analizando ${candidate.label} en backend...`);
+        const candidateDataUrl = await blobToDataUrl(candidate.input);
+        const response = await fetch(`${getOcrApiBaseUrl()}/ocr-id`, {
+          method: "POST",
+          headers: {
+            "Content-Type": "application/json"
+          },
+          body: JSON.stringify({
+            imageBase64: candidateDataUrl,
+            sourceLabel: `${sourceLabel} - ${candidate.label}`
+          })
         });
-        const ocrText = (result?.data?.text || "").trim();
-        const parsed = parseBoliviaIdCardData(ocrText);
+
+        if (!response.ok) {
+          const errorPayload = await response.json().catch(() => ({}));
+          const errorMessage =
+            errorPayload?.message || "No se pudo completar OCR en backend.";
+          throw new Error(errorMessage);
+        }
+
+        const result = await response.json();
         const extractedCount = [
-          parsed.firstNamesValue,
-          parsed.lastNamesValue,
-          parsed.documentIdValue
+          result?.firstNamesValue,
+          result?.lastNamesValue,
+          result?.documentIdValue
         ].filter(Boolean).length;
-        const confidence = Number(result?.data?.confidence || 0);
-        const score = extractedCount * 100 + confidence;
+        const confidence = Number(result?.confidence || 0);
+        const score = extractedCount * 100 + confidence + (i === 0 ? 10 : 0);
         attempts.push({
           label: candidate.label,
-          text: ocrText,
-          parsed,
+          debugSample: result?.debugSample || "",
+          parsed: {
+            firstNamesValue: result?.firstNamesValue || "",
+            lastNamesValue: result?.lastNamesValue || "",
+            documentIdValue: result?.documentIdValue || ""
+          },
           score
         });
       }
 
       const bestAttempt = attempts.sort((a, b) => b.score - a.score)[0];
-      if (!bestAttempt?.text) {
+      if (
+        !bestAttempt?.parsed?.firstNamesValue &&
+        !bestAttempt?.parsed?.lastNamesValue &&
+        !bestAttempt?.parsed?.documentIdValue
+      ) {
         throw new Error("OCR no detectó texto legible. Intenta con una foto más nítida.");
       }
-
-      const debugSample = bestAttempt.text
-        .split("\n")
-        .map((line) => line.trim())
-        .filter(Boolean)
-        .slice(0, 4)
-        .join(" | ");
-      setIdReadDebug(`OCR ${sourceLabel} (${bestAttempt.label}): ${debugSample}`);
 
       const { firstNamesValue, lastNamesValue, documentIdValue } = bestAttempt.parsed;
 
       if (!firstNamesValue && !lastNamesValue && !documentIdValue) {
-        throw new Error("No se pudieron detectar nombres o CI en el documento boliviano.");
+        throw new Error("No se pudieron detectar nombres o número de documento.");
       }
 
       if (firstNamesValue) setFirstNames(firstNamesValue);
@@ -943,12 +939,12 @@ function Home({ amplifyOutputs }) {
       if (documentIdValue) setIdentificationNumber(documentIdValue);
 
       if (firstNamesValue && lastNamesValue) {
-        setIdReadSuccess("Datos detectados y cargados desde el carnet boliviano.");
+        setIdReadSuccess("Datos detectados y cargados desde el documento.");
       } else {
         setIdReadSuccess("Lectura parcial: revisa y completa los campos faltantes.");
       }
     } catch (error) {
-      console.error("Error leyendo carnet boliviano con OCR", error);
+      console.error("Error leyendo documento con OCR", error);
       setIdReadError(error?.message || "No se pudo procesar la imagen del carnet de identidad.");
     } finally {
       setOcrStatus("");
@@ -964,7 +960,6 @@ function Home({ amplifyOutputs }) {
     setIdDocumentImageDataUrl("");
     setIdReadError("");
     setIdReadSuccess("");
-    setIdReadDebug("");
     setIdentificationNumber("");
     setFirstNames("");
     setLastNames("");
@@ -989,6 +984,8 @@ function Home({ amplifyOutputs }) {
 
   const getPkpassApiBaseUrl = () =>
     (import.meta.env.VITE_PKPASS_API_URL || apiBaseUrl).replace(/\/+$/, "");
+  const getOcrApiBaseUrl = () =>
+    (import.meta.env.VITE_OCR_API_URL || getPkpassApiBaseUrl()).replace(/\/+$/, "");
 
   const buildPkpassBlob = async () => {
     const fullName = `${firstNames} ${lastNames}`.replace(/\s+/g, " ").trim();
@@ -1070,10 +1067,6 @@ function Home({ amplifyOutputs }) {
   };
 
   const handleFinishRegistration = () => {
-    if (!livenessApproved) {
-      setLivenessError("Completa y aprueba la prueba de vida para continuar.");
-      return;
-    }
     setConversationStatus("");
     setConversationError("");
     setIsPreview(true);
@@ -1191,10 +1184,10 @@ function Home({ amplifyOutputs }) {
               <form onSubmit={handleSubmit} className="space-y-4 text-left">
                 <div className="rounded-[12px] border border-[#d9e3fb] bg-[#f6f9ff] p-3">
                   <p className="text-sm font-semibold text-[#22355d]">
-                    Cargar carnet de identidad (Bolivia)
+                    Cargar documento de identidad
                   </p>
                   <p className="mt-1 text-xs text-[#5f6f8f]">
-                    Sube foto o PDF del CI boliviano para extraer nombres y número de documento automáticamente.
+                    Sube foto o PDF del documento para extraer nombres y número automáticamente.
                   </p>
                   <input
                     ref={idFileInputRef}
@@ -1244,21 +1237,13 @@ function Home({ amplifyOutputs }) {
                   {idReadError ? (
                     <p className="mt-2 text-xs text-[#b42318]">{idReadError}</p>
                   ) : null}
-                  {idReadDebug ? (
-                    <details className="mt-2">
-                      <summary className="cursor-pointer select-none text-xs text-[#5f6f8f]">
-                        Ver detalle de análisis
-                      </summary>
-                      <p className="mt-1 text-xs text-[#5f6f8f] break-words">{idReadDebug}</p>
-                    </details>
-                  ) : null}
                 </div>
 
                 {registrationStep === 1 ? (
                   <>
                     <div>
                       <label className="block text-sm font-semibold text-[#22355d] mb-1">
-                        Número de CI
+                        Número de documento
                       </label>
                       <input
                         type="text"
@@ -1408,69 +1393,6 @@ function Home({ amplifyOutputs }) {
                   </div>
                 </div>
 
-                <div className="rounded-[12px] border border-[#d9e3fb] bg-[#f6f9ff] p-3">
-                  <p className="text-sm font-semibold text-[#22355d]">
-                    Módulo prueba de vida
-                  </p>
-                  <p className="mt-1 text-xs text-[#5f6f8f]">
-                    Ahora valida presencia en vivo completando los 3 movimientos.
-                  </p>
-                  <div className="mt-2 grid grid-cols-1 sm:grid-cols-2 gap-2 text-xs">
-                    <p className="rounded-[8px] bg-white border border-[#d9e3fb] px-2 py-1 text-[#34517f]">
-                      Documento: {idDocumentImageDataUrl ? "Listo" : "Pendiente"}
-                    </p>
-                    <p className="rounded-[8px] bg-white border border-[#d9e3fb] px-2 py-1 text-[#34517f]">
-                      Estado: {livenessApproved ? "Aprobada" : isLivenessRunning ? "En proceso" : "Pendiente"}
-                    </p>
-                  </div>
-                  <div className="mt-2 flex flex-wrap items-center gap-2">
-                    <button
-                      type="button"
-                      onClick={runLivenessCheck}
-                      disabled={isLivenessRunning}
-                      className="px-3 py-2 text-xs rounded-[20px] border border-[#12a150] bg-[#12a150] hover:bg-[#0f8c46] text-white font-semibold disabled:opacity-70"
-                    >
-                      {isLivenessRunning
-                        ? "Validando..."
-                        : "Iniciar prueba de vida"}
-                    </button>
-                  </div>
-                  <div className="mt-2 mx-auto w-40 h-52 rounded-[10px] border border-[#cfdcf8] bg-[#edf3ff] flex items-center justify-center overflow-hidden">
-                    {livenessCameraOn ? (
-                      <video
-                        ref={livenessVideoRef}
-                        className="w-full h-full object-cover"
-                        autoPlay
-                        playsInline
-                        muted
-                      />
-                    ) : livenessPreviewDataUrl ? (
-                      <img
-                        src={livenessPreviewDataUrl}
-                        alt="Captura de prueba de vida"
-                        className="w-full h-full object-cover"
-                      />
-                    ) : (
-                      <span className="text-xs text-[#5f6f8f] px-3 text-center">
-                        Cámara de prueba de vida inactiva
-                      </span>
-                    )}
-                  </div>
-                  <canvas ref={livenessCanvasRef} className="hidden" />
-                  {livenessStatus ? (
-                    <p className="mt-2 text-xs text-[#34517f]">
-                      Paso {livenessStepIndex || 1}/3: {livenessStatus}
-                    </p>
-                  ) : null}
-                  {livenessError ? (
-                    <p className="mt-2 text-xs text-[#b42318]">{livenessError}</p>
-                  ) : null}
-                  {livenessApproved ? (
-                    <p className="mt-2 text-xs font-semibold text-[#0f8c46]">
-                      Prueba de vida aprobada.
-                    </p>
-                  ) : null}
-                </div>
                   </>
                 ) : null}
 
