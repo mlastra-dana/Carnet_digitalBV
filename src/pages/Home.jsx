@@ -233,7 +233,51 @@ function Home({ amplifyOutputs }) {
       .replace(/\s+/g, " ")
       .trim();
 
-  const extractValueByLabel = (lines, labels) => {
+  const cleanBoliviaNameValue = (value, maxWords = 4) => {
+    const cleaned = normalizeNameText((value || "").split(/[|><]/)[0] || "")
+      .toUpperCase()
+      .replace(/\s+/g, " ")
+      .trim();
+
+    const noiseWords = new Set([
+      "ESTADO",
+      "PLURINACIONAL",
+      "BOLIVIA",
+      "SERVICIO",
+      "GENERAL",
+      "IDENTIFICACION",
+      "PERSONAL",
+      "NACIMIENTO",
+      "NACIONALIDAD",
+      "FIRMA",
+      "TITULAR",
+      "CARNET",
+      "IDENTIDAD",
+      "APELLIDO",
+      "APELLIDOS",
+      "NOMBRE",
+      "NOMBRES",
+      "CI",
+      "SEGIP",
+      "NUMERO",
+      "DOCUMENTO"
+    ]);
+
+    const filtered = cleaned
+      .split(" ")
+      .filter((word) => word && !noiseWords.has(word))
+      .join(" ")
+      .trim();
+
+    return filtered
+      .split(" ")
+      .filter(Boolean)
+      .slice(0, maxWords)
+      .join(" ")
+      .trim();
+  };
+
+  const extractLabeledBoliviaField = (lines, labels, maxWords = 3) => {
     for (let index = 0; index < lines.length; index += 1) {
       const line = lines[index];
       const lineUpper = line.toUpperCase();
@@ -243,107 +287,92 @@ function Home({ amplifyOutputs }) {
       const inline = line
         .replace(new RegExp(`.*${matchedLabel}\\s*[:\\-]?\\s*`, "i"), "")
         .trim();
-      if (inline) return inline;
+      const cleanInline = cleanBoliviaNameValue(inline, maxWords);
+      if (cleanInline) return cleanInline;
 
-      const nextLine = (lines[index + 1] || "").trim();
+      const nextLine = cleanBoliviaNameValue(lines[index + 1] || "", maxWords);
       if (nextLine) return nextLine;
     }
     return "";
   };
 
-  const parseIdCardData = (ocrText) => {
+  const formatBoliviaDocumentId = (digits, complement, expedition) => {
+    if (!digits) return "";
+    const normalizedComplement = (complement || "").replace(/[^0-9A-Z]/gi, "").toUpperCase();
+    const normalizedExpedition = (expedition || "").replace(/[^A-Z]/gi, "").toUpperCase();
+    return [
+      `${digits}${normalizedComplement ? `-${normalizedComplement}` : ""}`,
+      normalizedExpedition
+    ]
+      .filter(Boolean)
+      .join(" ")
+      .trim();
+  };
+
+  const extractBoliviaDocumentId = (lines) => {
+    const joinedText = lines.join(" ");
+    const labelFocusedText = lines
+      .filter((line) =>
+        /(C[.\s]?I\b|CARNET|NRO|Nº|N°|NUMERO|DOCUMENTO|IDENTIDAD)/i.test(line)
+      )
+      .join(" ");
+    const searchText = `${labelFocusedText} ${joinedText}`.trim();
+    const docRegex =
+      /\b([0-9]{5,10})(?:\s*[-.]\s*([0-9A-Z]{1,3}))?(?:\s+(LP|CB|SC|OR|PT|CH|TJ|BE|PD))?\b/gi;
+
+    let bestMatch = null;
+    let currentMatch = docRegex.exec(searchText);
+    while (currentMatch) {
+      const digits = (currentMatch[1] || "").replace(/\D/g, "");
+      const complement = (currentMatch[2] || "").toUpperCase();
+      const expedition = (currentMatch[3] || "").toUpperCase();
+      if (digits.length >= 5 && digits.length <= 10) {
+        if (!bestMatch || digits.length > bestMatch.digits.length) {
+          bestMatch = { digits, complement, expedition };
+        }
+      }
+      currentMatch = docRegex.exec(searchText);
+    }
+
+    if (!bestMatch) return "";
+    return formatBoliviaDocumentId(
+      bestMatch.digits,
+      bestMatch.complement,
+      bestMatch.expedition
+    );
+  };
+
+  const parseBoliviaIdCardData = (ocrText) => {
     const lines = (ocrText || "")
       .split("\n")
       .map((line) => line.replace(/\s+/g, " ").trim())
       .filter(Boolean);
 
-    const cleanDetectedField = (value, maxWords = 4) => {
-      const cutByDelimiter = (value || "").split(/[|><]/)[0] || "";
-      const cleaned = normalizeNameText(cutByDelimiter).toUpperCase();
-      const noiseWords = new Set([
-        "REPUBLICA",
-        "BOLIVARIANA",
-        "VENEZUELA",
-        "CEDULA",
-        "IDENTIDAD",
-        "DIRECTOR",
-        "NACIMIENTO",
-        "EDO",
-        "CIVIL",
-        "FIRMA",
-        "TITULAR",
-        "VENEZOLANO",
-        "EXPEDICION",
-        "VENCIMIENTO",
-        "NOMBRES",
-        "APELLIDOS",
-        "NOMBRE",
-        "APELLIDO",
-        "DS",
-        "DE"
-      ]);
-      const filtered = cleaned
-        .split(" ")
-        .filter((word) => word && !noiseWords.has(word))
-        .join(" ")
-        .trim();
+    const apellidoPaterno = extractLabeledBoliviaField(
+      lines,
+      ["APELLIDO PATERNO", "PRIMER APELLIDO"],
+      2
+    );
+    const apellidoMaterno = extractLabeledBoliviaField(
+      lines,
+      ["APELLIDO MATERNO", "SEGUNDO APELLIDO"],
+      2
+    );
+    const genericLastNames = extractLabeledBoliviaField(lines, ["APELLIDOS", "APELLIDO"], 3);
+    let lastNamesValue = [apellidoPaterno, apellidoMaterno].filter(Boolean).join(" ").trim();
+    if (!lastNamesValue) {
+      lastNamesValue = genericLastNames;
+    }
 
-      const stopTokens = [" DIRECTOR", " FIRMA", " TITULAR", " NACIMIENTO", " CIVIL"];
-      let truncated = filtered;
-      stopTokens.forEach((token) => {
-        const idx = truncated.indexOf(token);
-        if (idx > 0) truncated = truncated.slice(0, idx).trim();
-      });
-
-      const looksLikeNombresPrefix = (word) => {
-        const compact = (word || "").replace(/[^A-Z]/g, "");
-        if (compact.startsWith("NOMBRE")) return true;
-        if (compact.startsWith("NOMBRES")) return true;
-        // Variantes OCR comunes de "NOMBRES" (ej: NOUERES, NOBRES)
-        return /^N[O0][A-Z]{2,8}(ES|S)$/.test(compact);
-      };
-
-      const words = truncated
-        .split(" ")
-        .filter(Boolean)
-        .filter((word, index) => !(index === 0 && looksLikeNombresPrefix(word)));
-      return words.slice(0, maxWords).join(" ").trim();
-    };
-
-    const extractLabeledField = (field) => {
-      const labelRegex =
-        field === "APELLIDOS"
-          ? /APE[L1I]{1,2}ID[O0]S?\s*[:\-]?\s*(.+)$/i
-          : /N[O0]MBR[E3]S?\s*[:\-]?\s*(.+)$/i;
-      const maxWords = field === "APELLIDOS" ? 2 : 3;
-
-      for (let i = 0; i < lines.length; i += 1) {
-        const line = lines[i];
-        const match = line.match(labelRegex);
-        if (match?.[1]) {
-          const cleaned = cleanDetectedField(match[1], maxWords);
-          if (cleaned) return cleaned;
-        }
-
-        const upperLine = line.toUpperCase();
-        const hasLabel =
-          field === "APELLIDOS"
-            ? upperLine.includes("APELLIDOS") || upperLine.includes("APELI")
-            : upperLine.includes("NOMBRES") || upperLine.includes("NOMBRE");
-        if (hasLabel) {
-          const nextClean = cleanDetectedField(lines[i + 1] || "", maxWords);
-          if (nextClean) return nextClean;
-        }
-      }
-      return "";
-    };
-
-    let lastNamesValue = extractLabeledField("APELLIDOS");
-    let firstNamesValue = extractLabeledField("NOMBRES");
+    let firstNamesValue = extractLabeledBoliviaField(
+      lines,
+      ["NOMBRES", "NOMBRE"],
+      3
+    );
 
     if (!firstNamesValue || !lastNamesValue) {
       const candidateLines = lines
-        .map((line) => cleanDetectedField(line, 3))
+        .map((line) => cleanBoliviaNameValue(line, 3))
         .filter((line) => line.split(" ").length >= 2);
       if (!lastNamesValue && candidateLines[0]) {
         lastNamesValue = candidateLines[0].split(" ").slice(0, 2).join(" ");
@@ -353,20 +382,7 @@ function Home({ amplifyOutputs }) {
       }
     }
 
-    const compactText = lines.join(" ");
-    const cedulaWithPrefixMatch =
-      compactText.match(/([VE])\s*([0-9]{1,2}(?:[.\s][0-9]{3}){1,2})(?:[.\s]+[0-9]{2,3})?/i) ||
-      compactText.match(/([VE])\s*([0-9]{6,9})(?:\s+[0-9]{2,3})?/i);
-    const fallbackCedulaMatch = compactText.match(/\b([0-9]{6,9})\b/);
-    const documentPrefix = (cedulaWithPrefixMatch?.[1] || "V").toUpperCase();
-    const documentDigits = (
-      cedulaWithPrefixMatch?.[2] ||
-      fallbackCedulaMatch?.[1] ||
-      ""
-    ).replace(/\D/g, "");
-    const documentIdValue = documentDigits
-      ? `${documentPrefix}${documentDigits}`
-      : "";
+    const documentIdValue = extractBoliviaDocumentId(lines);
 
     return {
       firstNamesValue,
@@ -395,13 +411,62 @@ function Home({ amplifyOutputs }) {
       reader.readAsDataURL(blob);
     });
 
+  const preprocessImageDataUrlForOcr = async (dataUrl) => {
+    const image = await loadImageFromDataUrl(dataUrl);
+    const scale = image.width < 1400 ? 2 : 1.4;
+    const canvas = document.createElement("canvas");
+    const context = canvas.getContext("2d");
+    if (!context) {
+      throw new Error("No se pudo preparar la imagen para OCR.");
+    }
+
+    canvas.width = Math.max(1200, Math.floor(image.width * scale));
+    canvas.height = Math.max(700, Math.floor(image.height * scale));
+
+    context.imageSmoothingEnabled = true;
+    context.imageSmoothingQuality = "high";
+    context.drawImage(image, 0, 0, canvas.width, canvas.height);
+
+    const frame = context.getImageData(0, 0, canvas.width, canvas.height);
+    const data = frame.data;
+    let luminanceSum = 0;
+
+    for (let i = 0; i < data.length; i += 4) {
+      const gray = data[i] * 0.3 + data[i + 1] * 0.59 + data[i + 2] * 0.11;
+      luminanceSum += gray;
+    }
+
+    const average = luminanceSum / (data.length / 4 || 1);
+    const threshold = Math.max(105, Math.min(180, average * 0.95));
+
+    for (let i = 0; i < data.length; i += 4) {
+      const gray = data[i] * 0.3 + data[i + 1] * 0.59 + data[i + 2] * 0.11;
+      const boosted = Math.max(0, Math.min(255, (gray - 128) * 1.8 + 128));
+      const bin = boosted > threshold ? 255 : 0;
+      data[i] = bin;
+      data[i + 1] = bin;
+      data[i + 2] = bin;
+    }
+
+    context.putImageData(frame, 0, 0);
+    return canvasToBlob(canvas);
+  };
+
   const getOcrInputFromFile = async (file) => {
     const isPdf =
       file?.type === "application/pdf" || file?.name?.toLowerCase().endsWith(".pdf");
 
     if (!isPdf) {
       const previewDataUrl = await blobToDataUrl(file);
-      return { input: file, sourceLabel: "imagen", previewDataUrl };
+      const enhanced = await preprocessImageDataUrlForOcr(previewDataUrl);
+      return {
+        sourceLabel: "imagen",
+        previewDataUrl,
+        ocrCandidates: [
+          { input: enhanced, label: "imagen optimizada" },
+          { input: file, label: "imagen original" }
+        ]
+      };
     }
 
     const pdfjs = await import("pdfjs-dist/legacy/build/pdf.mjs");
@@ -429,8 +494,16 @@ function Home({ amplifyOutputs }) {
     await page.render({ canvasContext: context, viewport }).promise;
     const renderedBlob = await canvasToBlob(canvas);
     const previewDataUrl = await blobToDataUrl(renderedBlob);
+    const enhanced = await preprocessImageDataUrlForOcr(previewDataUrl);
 
-    return { input: renderedBlob, sourceLabel: "pdf (página 1)", previewDataUrl };
+    return {
+      sourceLabel: "pdf (página 1)",
+      previewDataUrl,
+      ocrCandidates: [
+        { input: enhanced, label: "pdf optimizado" },
+        { input: renderedBlob, label: "pdf original" }
+      ]
+    };
   };
 
   const loadImageFromDataUrl = (dataUrl) =>
@@ -809,7 +882,7 @@ function Home({ amplifyOutputs }) {
         throw new Error("No se pudo inicializar OCR en el navegador.");
       }
 
-      const { input: ocrInput, sourceLabel, previewDataUrl } = await getOcrInputFromFile(file);
+      const { ocrCandidates, sourceLabel, previewDataUrl } = await getOcrInputFromFile(file);
       setIdDocumentImageDataUrl(previewDataUrl || "");
       const toSpanishStatus = (status) => {
         const normalized = (status || "").toLowerCase();
@@ -820,31 +893,49 @@ function Home({ amplifyOutputs }) {
         return "Analizando documento...";
       };
 
-      const result = await recognize(ocrInput, "spa", {
-        logger: (message) => {
-          const nextStatus = (message?.status || "").toString();
-          if (nextStatus) setOcrStatus(toSpanishStatus(nextStatus));
-        }
-      });
-      const ocrText = result?.data?.text || "";
-      if (!ocrText.trim()) {
+      const attempts = [];
+      for (let i = 0; i < ocrCandidates.length; i += 1) {
+        const candidate = ocrCandidates[i];
+        const result = await recognize(candidate.input, "spa+eng", {
+          logger: (message) => {
+            const nextStatus = (message?.status || "").toString();
+            if (nextStatus) setOcrStatus(toSpanishStatus(nextStatus));
+          }
+        });
+        const ocrText = (result?.data?.text || "").trim();
+        const parsed = parseBoliviaIdCardData(ocrText);
+        const extractedCount = [
+          parsed.firstNamesValue,
+          parsed.lastNamesValue,
+          parsed.documentIdValue
+        ].filter(Boolean).length;
+        const confidence = Number(result?.data?.confidence || 0);
+        const score = extractedCount * 100 + confidence;
+        attempts.push({
+          label: candidate.label,
+          text: ocrText,
+          parsed,
+          score
+        });
+      }
+
+      const bestAttempt = attempts.sort((a, b) => b.score - a.score)[0];
+      if (!bestAttempt?.text) {
         throw new Error("OCR no detectó texto legible. Intenta con una foto más nítida.");
       }
 
-      const debugSample = ocrText
+      const debugSample = bestAttempt.text
         .split("\n")
         .map((line) => line.trim())
         .filter(Boolean)
         .slice(0, 4)
         .join(" | ");
-      setIdReadDebug(`OCR ${sourceLabel} (español): ${debugSample}`);
+      setIdReadDebug(`OCR ${sourceLabel} (${bestAttempt.label}): ${debugSample}`);
 
-      const { firstNamesValue, lastNamesValue, documentIdValue } = parseIdCardData(
-        ocrText
-      );
+      const { firstNamesValue, lastNamesValue, documentIdValue } = bestAttempt.parsed;
 
       if (!firstNamesValue && !lastNamesValue && !documentIdValue) {
-        throw new Error("No se pudieron detectar nombres o apellidos en la cédula.");
+        throw new Error("No se pudieron detectar nombres o CI en el documento boliviano.");
       }
 
       if (firstNamesValue) setFirstNames(firstNamesValue);
@@ -852,13 +943,13 @@ function Home({ amplifyOutputs }) {
       if (documentIdValue) setIdentificationNumber(documentIdValue);
 
       if (firstNamesValue && lastNamesValue) {
-        setIdReadSuccess("Datos detectados y cargados desde la cédula.");
+        setIdReadSuccess("Datos detectados y cargados desde el carnet boliviano.");
       } else {
         setIdReadSuccess("Lectura parcial: revisa y completa los campos faltantes.");
       }
     } catch (error) {
-      console.error("Error leyendo cédula con OCR", error);
-      setIdReadError(error?.message || "No se pudo procesar la imagen de cédula.");
+      console.error("Error leyendo carnet boliviano con OCR", error);
+      setIdReadError(error?.message || "No se pudo procesar la imagen del carnet de identidad.");
     } finally {
       setOcrStatus("");
       setIsReadingId(false);
@@ -1100,10 +1191,10 @@ function Home({ amplifyOutputs }) {
               <form onSubmit={handleSubmit} className="space-y-4 text-left">
                 <div className="rounded-[12px] border border-[#d9e3fb] bg-[#f6f9ff] p-3">
                   <p className="text-sm font-semibold text-[#22355d]">
-                    Cargar documento de identidad
+                    Cargar carnet de identidad (Bolivia)
                   </p>
                   <p className="mt-1 text-xs text-[#5f6f8f]">
-                    Sube una imagen o PDF del documento de identidad para registrar los datos del titular.
+                    Sube foto o PDF del CI boliviano para extraer nombres y número de documento automáticamente.
                   </p>
                   <input
                     ref={idFileInputRef}
@@ -1167,7 +1258,7 @@ function Home({ amplifyOutputs }) {
                   <>
                     <div>
                       <label className="block text-sm font-semibold text-[#22355d] mb-1">
-                        Número de cédula
+                        Número de CI
                       </label>
                       <input
                         type="text"
@@ -1175,7 +1266,7 @@ function Home({ amplifyOutputs }) {
                         onChange={(e) => setIdentificationNumber(e.target.value)}
                         required
                         className={inputClass}
-                        placeholder="Ej: V12345678"
+                        placeholder="Ej: 12345678 o 12345678-1 LP"
                       />
                     </div>
 
