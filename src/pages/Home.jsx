@@ -1051,20 +1051,24 @@ function Home({ amplifyOutputs }) {
       const pkpassBlob = await buildPkpassBlob();
       pkpassBase64 = await blobToBase64(pkpassBlob);
     } catch (error) {
-      console.warn("No se pudo generar el PKPASS para S3. Se enviara como pendiente.", error);
+      console.error("No se pudo generar el PKPASS para S3.", error);
+      throw new Error(
+        "No se pudo generar el carnet digital para subirlo a S3. Verifica el endpoint /pkpass."
+      );
+    }
+
+    if (!pkpassBase64) {
+      throw new Error(
+        "No se pudo convertir el carnet digital a base64 para subirlo a S3."
+      );
     }
 
     const payload = {
       NOMBRECLIENTE: fullName || "Cliente",
       DOCUMENT_ID: safeDocumentId,
       EMAIL: (email || "").trim(),
-      PKPASS: "pendiente",
-      ...(pkpassBase64
-        ? {
-            PKPASS_BASE64: pkpassBase64,
-            PKPASS_FILE_NAME: `carnet-${safeDocumentId || "asegurado"}.pkpass`
-          }
-        : {})
+      PKPASS_BASE64: pkpassBase64,
+      PKPASS_FILE_NAME: `carnet-${safeDocumentId || "asegurado"}.pkpass`
     };
 
     const response = await fetch(
@@ -1102,7 +1106,8 @@ function Home({ amplifyOutputs }) {
       console.error("Error iniciando conversación en DANA", error);
       setConversationStatus("");
       setConversationError(
-        "No se pudo iniciar la conversación en DANA. Revisa conexión o credenciales."
+        error?.message ||
+          "No se pudo iniciar la conversación en DANA. Revisa conexión o credenciales."
       );
     } finally {
       setIsSendingConversation(false);
