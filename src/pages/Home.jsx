@@ -1605,7 +1605,7 @@ function Home({ amplifyOutputs }) {
                         rel="noreferrer"
                         className="text-[#2d56c8] underline break-all"
                       >
-                        contacto
+                        abrir enlace
                       </a>
                     </p>
                   </div>
