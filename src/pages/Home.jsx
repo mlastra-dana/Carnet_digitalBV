@@ -1579,10 +1579,6 @@ function Home({ amplifyOutputs }) {
                     </div>
                   </div>
 
-                  <div className="mt-4 rounded-[12px] border border-[#d3def9] bg-[#f5f8ff] px-3 py-2">
-                    <p className="text-[10px] uppercase tracking-[0.18em] text-[#5f6f8f]">Documento</p>
-                    <p className="text-xs font-semibold text-[#2d468f]">Carnet digital de asegurado</p>
-                  </div>
                 </div>
               ) : (
                 <div className="bg-white text-[#22355d] mx-4 rounded-[16px] border border-[#d7e3fd] p-4">
@@ -1612,9 +1608,6 @@ function Home({ amplifyOutputs }) {
                 </div>
               )}
 
-              <div className="px-5 py-3 text-[10px] tracking-[0.14em] uppercase text-white/75">
-                {showBackPreview ? "Reverso del carnet" : "Documento digital de asegurado"}
-              </div>
             </div>
           </div>
 
