@@ -1093,7 +1093,7 @@ function Home({ amplifyOutputs }) {
 
     try {
       await startDanaConversation();
-      setConversationStatus("Registro completado. Conversación iniciada en DANA.");
+      setConversationStatus("");
     } catch (error) {
       console.error("Error iniciando conversación en DANA", error);
       setConversationStatus("");
@@ -1587,9 +1587,6 @@ function Home({ amplifyOutputs }) {
               Descargar carnet (.pkpass)
             </button>
 
-            {conversationStatus ? (
-              <p className="text-xs text-[#0f8c46]">{conversationStatus}</p>
-            ) : null}
             {conversationError ? (
               <p className="text-xs text-[#b42318]">{conversationError}</p>
             ) : null}
