@@ -1309,14 +1309,16 @@ function Home({ amplifyOutputs }) {
                     className="hidden"
                   />
                   <div className="mt-2 flex items-center gap-2">
-                    <button
-                      type="button"
-                      onClick={() => idFileInputRef.current?.click()}
-                      disabled={isReadingId}
-                      className={secondaryButtonClass}
-                    >
-                      {isReadingId ? "Analizando documento..." : "Cargar documento"}
-                    </button>
+                    {!idFileName ? (
+                      <button
+                        type="button"
+                        onClick={() => idFileInputRef.current?.click()}
+                        disabled={isReadingId}
+                        className={secondaryButtonClass}
+                      >
+                        {isReadingId ? "Analizando documento..." : "Adjuntar documento"}
+                      </button>
+                    ) : null}
                     {idReadSuccess ? (
                       <p className="text-xs text-[#0f8c46]">{idReadSuccess}</p>
                     ) : null}
