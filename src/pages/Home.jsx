@@ -1535,7 +1535,7 @@ function Home({ amplifyOutputs }) {
                       }}
                       className="mt-3 w-full px-8 py-3 rounded-[20px] border border-[#3864d9] bg-white hover:bg-[#ecf2ff] text-[#3864d9] text-base font-bold transition-colors focus:outline-none focus:ring-2 focus:ring-[#3864d9] focus:ring-offset-2 focus:ring-offset-white"
                     >
-                      Volver al paso 1
+                      Regresar
                     </button>
                   ) : null}
                   <button
