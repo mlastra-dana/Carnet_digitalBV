@@ -43,18 +43,8 @@ function sanitizeContactUrl(rawUrl) {
   return `https://${input}`;
 }
 
-function applyContactBackField(pass, contactUrlInput) {
+function applyContactBackFields(pass, { contactUrlInput, email }) {
   if (!pass.eventTicket) return;
-  const contactUrl = sanitizeContactUrl(contactUrlInput || process.env.PKPASS_CONTACT_URL);
-  if (!contactUrl) return;
-
-  const safeHref = escapeHtml(contactUrl);
-  const contactField = {
-    key: "contacto",
-    label: "contacto",
-    value: contactUrl,
-    attributedValue: `<a href="${safeHref}">contacto</a>`
-  };
 
   if (!Array.isArray(pass.eventTicket.backFields)) {
     pass.eventTicket.backFields = [];
@@ -62,14 +52,43 @@ function applyContactBackField(pass, contactUrlInput) {
     pass.eventTicket.backFields = [...pass.eventTicket.backFields];
   }
 
-  const currentIndex = pass.eventTicket.backFields.findIndex(
-    (field) => field?.key === "contacto"
-  );
-  if (currentIndex >= 0) {
-    pass.eventTicket.backFields[currentIndex] = contactField;
-  } else {
-    pass.eventTicket.backFields.push(contactField);
+  const upsertBackField = (field) => {
+    const index = pass.eventTicket.backFields.findIndex(
+      (current) => current?.key === field.key
+    );
+    if (index >= 0) {
+      pass.eventTicket.backFields[index] = field;
+      return;
+    }
+    pass.eventTicket.backFields.push(field);
+  };
+
+  // Siempre agregamos una nota para garantizar que el pase tenga reverso/detalles.
+  upsertBackField({
+    key: "nota_carnet",
+    label: "Información",
+    value: "Carnet digital de asegurado LBC Seguros."
+  });
+
+  const normalizedEmail = (email || "").toString().trim();
+  if (normalizedEmail) {
+    upsertBackField({
+      key: "email_contacto",
+      label: "Email",
+      value: normalizedEmail
+    });
   }
+
+  const contactUrl = sanitizeContactUrl(contactUrlInput || process.env.PKPASS_CONTACT_URL);
+  if (!contactUrl) return;
+
+  const safeHref = escapeHtml(contactUrl);
+  upsertBackField({
+    key: "contacto",
+    label: "Contacto",
+    value: contactUrl,
+    attributedValue: `<a href="${safeHref}">Abrir contacto</a>`
+  });
 }
 
 function normalizeNameText(value) {
@@ -435,7 +454,7 @@ app.get("/pkpass", async (req, res) => {
       };
     }
 
-    applyContactBackField(pass, contactUrl);
+    applyContactBackFields(pass, { contactUrlInput: contactUrl, email });
 
     res.setHeader("Content-Type", "application/vnd.apple.pkpass");
     res.setHeader(

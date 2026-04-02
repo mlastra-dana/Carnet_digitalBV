@@ -202,14 +202,35 @@ function Home({ amplifyOutputs }) {
     []
   );
 
+  const isLocalhostUrl = (value) => {
+    const url = (value || "").toString().trim().toLowerCase();
+    if (!url) return false;
+    return (
+      url.includes("://localhost") ||
+      url.includes("://127.0.0.1") ||
+      url.includes("://0.0.0.0")
+    );
+  };
+
+  const normalizeApiBaseUrl = (value) => (value || "").toString().trim().replace(/\/+$/, "");
+
+  const isHostedEnvironment =
+    typeof window !== "undefined" && !isLocalhostUrl(window.location.origin);
+
+  const pickApiBaseUrl = (candidates) => {
+    const normalized = candidates.map(normalizeApiBaseUrl).filter(Boolean);
+    if (!isHostedEnvironment) {
+      return normalized[0] || "http://localhost:3001";
+    }
+    return normalized.find((candidate) => !isLocalhostUrl(candidate)) || "";
+  };
+
   const apiBaseUrl = useMemo(() => {
-    if (import.meta.env.VITE_API_URL) {
-      return import.meta.env.VITE_API_URL;
-    }
-    if (amplifyOutputs?.apiUrl) {
-      return amplifyOutputs.apiUrl;
-    }
-    return "http://localhost:3001";
+    return pickApiBaseUrl([
+      import.meta.env.VITE_API_URL,
+      amplifyOutputs?.apiUrl,
+      "http://localhost:3001"
+    ]);
   }, [amplifyOutputs]);
 
   const inputClass =
@@ -547,13 +568,25 @@ function Home({ amplifyOutputs }) {
   };
 
   const getOcrApiCandidates = () => {
-    const candidates = [
+    const selected = pickApiBaseUrl([
       (import.meta.env.VITE_OCR_API_URL || "").toString(),
       (import.meta.env.VITE_PKPASS_API_URL || "").toString(),
       (import.meta.env.VITE_API_URL || "").toString(),
+      (amplifyOutputs?.apiUrl || "").toString(),
+      (apiBaseUrl || "").toString(),
+      "http://localhost:3001"
+    ]);
+
+    const candidates = [
+      selected,
+      (import.meta.env.VITE_OCR_API_URL || "").toString(),
+      (import.meta.env.VITE_API_URL || "").toString(),
+      (amplifyOutputs?.apiUrl || "").toString(),
+      (apiBaseUrl || "").toString(),
       "http://localhost:3001"
     ]
-      .map((value) => value.trim().replace(/\/+$/, ""))
+      .map((value) => normalizeApiBaseUrl(value))
+      .filter((value) => (isHostedEnvironment ? !isLocalhostUrl(value) : true))
       .filter(Boolean);
     return [...new Set(candidates)];
   };
@@ -1073,7 +1106,13 @@ function Home({ amplifyOutputs }) {
   };
 
   const getPkpassApiBaseUrl = () =>
-    (import.meta.env.VITE_PKPASS_API_URL || apiBaseUrl).replace(/\/+$/, "");
+    pickApiBaseUrl([
+      import.meta.env.VITE_PKPASS_API_URL,
+      import.meta.env.VITE_API_URL,
+      amplifyOutputs?.apiUrl,
+      apiBaseUrl,
+      "http://localhost:3001"
+    ]);
 
   const buildPkpassBlob = async () => {
     const fullName = `${firstNames} ${lastNames}`.replace(/\s+/g, " ").trim();
