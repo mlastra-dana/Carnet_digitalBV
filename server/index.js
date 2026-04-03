@@ -19,12 +19,6 @@ app.use(
   })
 );
 
-function buildQrDemoMessage(name, email) {
-  const safeName = (name || "ASEGURADO").toString().trim();
-  const safeEmail = (email || "sin-email").toString().trim();
-  return `LBC-DEMO|${safeName}|${safeEmail}|CARNET-DIGITAL`;
-}
-
 function escapeHtml(value) {
   return (value || "")
     .replace(/&/g, "&amp;")
@@ -43,7 +37,7 @@ function sanitizeContactUrl(rawUrl) {
   return `https://${input}`;
 }
 
-function applyContactBackFields(pass, { contactUrlInput, email }) {
+function applyContactBackFields(pass, { contactUrlInput }) {
   if (!pass.eventTicket) return;
 
   if (!Array.isArray(pass.eventTicket.backFields)) {
@@ -70,15 +64,6 @@ function applyContactBackFields(pass, { contactUrlInput, email }) {
     value: "Carnet digital de asegurado LBC Seguros."
   });
 
-  const normalizedEmail = (email || "").toString().trim();
-  if (normalizedEmail) {
-    upsertBackField({
-      key: "email_contacto",
-      label: "Email",
-      value: normalizedEmail
-    });
-  }
-
   const contactUrl = sanitizeContactUrl(contactUrlInput || process.env.PKPASS_CONTACT_URL);
   if (!contactUrl) return;
 
@@ -89,6 +74,78 @@ function applyContactBackFields(pass, { contactUrlInput, email }) {
     value: contactUrl,
     attributedValue: `<a href="${safeHref}">Abrir contacto</a>`
   });
+}
+
+function upsertField(fields, field) {
+  if (!Array.isArray(fields)) return [field];
+  const cloned = [...fields];
+  const index = cloned.findIndex((current) => current?.key === field.key);
+  if (index >= 0) {
+    cloned[index] = field;
+    return cloned;
+  }
+  cloned.push(field);
+  return cloned;
+}
+
+function applyPassFrontFields(pass, values) {
+  if (!pass.eventTicket) {
+    pass.eventTicket = {
+      headerFields: [],
+      primaryFields: [],
+      secondaryFields: [],
+      auxiliaryFields: []
+    };
+  }
+
+  const {
+    name,
+    documentId,
+    policyNumber,
+    planName,
+    validUntil
+  } = values;
+
+  const layout = pass.eventTicket;
+  const sessionId = Math.floor(100000 + Math.random() * 900000).toString();
+
+  layout.headerFields = upsertField(layout.headerFields, {
+    key: "sesion",
+    label: "Sesión",
+    value: sessionId
+  });
+
+  layout.primaryFields = upsertField(layout.primaryFields, {
+    key: "asegurado",
+    label: "Asegurado",
+    value: name || "Cliente"
+  });
+
+  layout.secondaryFields = upsertField(layout.secondaryFields, {
+    key: "fecha",
+    label: "Documento",
+    value: documentId || "V-00000000"
+  });
+
+  layout.auxiliaryFields = upsertField(layout.auxiliaryFields, {
+    key: "poliza",
+    label: "Póliza",
+    value: policyNumber || "POL-000001"
+  });
+  layout.auxiliaryFields = upsertField(layout.auxiliaryFields, {
+    key: "plan",
+    label: "Plan",
+    value: planName || "Integral"
+  });
+  layout.auxiliaryFields = upsertField(layout.auxiliaryFields, {
+    key: "vigencia",
+    label: "Vigencia",
+    value: validUntil || "31/12/2026"
+  });
+
+  // Evitar QR/barcode en el frente del pase.
+  delete pass.barcodes;
+  delete pass.barcode;
 }
 
 function normalizeNameText(value) {
@@ -406,6 +463,10 @@ app.get("/pkpass", async (req, res) => {
   try {
     const name = (req.query.name || "Juan Pérez").toString();
     const email = (req.query.email || "").toString();
+    const documentId = (req.query.documentId || "V-00000000").toString();
+    const policyNumber = (req.query.policyNumber || "POL-000001").toString();
+    const planName = (req.query.planName || "Integral").toString();
+    const validUntil = (req.query.validUntil || "31/12/2026").toString();
     const contactUrl = (req.query.contactUrl || "").toString();
 
     const passTemplateRaw = await fs.readFile(templatePassPath, "utf8");
@@ -413,48 +474,16 @@ app.get("/pkpass", async (req, res) => {
 
     const pass = { ...passTemplate };
 
-    if (pass.eventTicket && Array.isArray(pass.eventTicket.primaryFields)) {
-      pass.eventTicket.primaryFields = [...pass.eventTicket.primaryFields];
-      const aseguradoFieldIndex = pass.eventTicket.primaryFields.findIndex(
-        (f) => f.key === "asegurado"
-      );
-      const aseguradoField = {
-        key: "asegurado",
-        label: "Asegurado",
-        value: name
-      };
-      if (aseguradoFieldIndex >= 0) {
-        pass.eventTicket.primaryFields[aseguradoFieldIndex] = aseguradoField;
-      } else {
-        pass.eventTicket.primaryFields.push(aseguradoField);
-      }
-    }
+    applyPassFrontFields(pass, {
+      name,
+      email,
+      documentId,
+      policyNumber,
+      planName,
+      validUntil
+    });
 
-    if (pass.eventTicket && Array.isArray(pass.eventTicket.secondaryFields)) {
-      pass.eventTicket.secondaryFields = [...pass.eventTicket.secondaryFields];
-      const emailFieldIndex = pass.eventTicket.secondaryFields.findIndex(
-        (f) => f.key === "email"
-      );
-      const emailField = {
-        key: "email",
-        label: "Email",
-        value: email || "no-email"
-      };
-      if (emailFieldIndex >= 0) {
-        pass.eventTicket.secondaryFields[emailFieldIndex] = emailField;
-      } else {
-        pass.eventTicket.secondaryFields.push(emailField);
-      }
-    }
-
-    if (Array.isArray(pass.barcodes) && pass.barcodes[0]) {
-      pass.barcodes[0] = {
-        ...pass.barcodes[0],
-        message: buildQrDemoMessage(name, email)
-      };
-    }
-
-    applyContactBackFields(pass, { contactUrlInput: contactUrl, email });
+    applyContactBackFields(pass, { contactUrlInput: contactUrl });
 
     res.setHeader("Content-Type", "application/vnd.apple.pkpass");
     res.setHeader(
@@ -561,6 +590,10 @@ app.post("/pkpass", async (req, res) => {
   try {
     const name = (req.body?.name || "Juan Pérez").toString();
     const email = (req.body?.email || "").toString();
+    const documentId = (req.body?.documentId || "V-00000000").toString();
+    const policyNumber = (req.body?.policyNumber || "POL-000001").toString();
+    const planName = (req.body?.planName || "Integral").toString();
+    const validUntil = (req.body?.validUntil || "31/12/2026").toString();
     const photoDataUrl = (req.body?.photoDataUrl || "").toString();
     const contactUrl = (req.body?.contactUrl || "").toString();
 
@@ -569,73 +602,16 @@ app.post("/pkpass", async (req, res) => {
 
     const pass = { ...passTemplate };
 
-    // Mantener un único estilo de pase: carnet de asegurado.
-    if (!pass.eventTicket) {
-      pass.eventTicket = {
-        headerFields: [],
-        primaryFields: [],
-        secondaryFields: [],
-        auxiliaryFields: []
-      };
-    }
+    applyPassFrontFields(pass, {
+      name,
+      email,
+      documentId,
+      policyNumber,
+      planName,
+      validUntil
+    });
 
-    const layout = pass.eventTicket;
-
-    // Sesión dinámica (número aleatorio) en headerFields
-    if (Array.isArray(layout.headerFields)) {
-      layout.headerFields = [...layout.headerFields];
-      const sessionId = Math.floor(100000 + Math.random() * 900000).toString();
-      if (layout.headerFields[0]) {
-        layout.headerFields[0] = {
-          ...layout.headerFields[0],
-          value: sessionId
-        };
-      }
-    }
-
-    // Campo asegurado dinámico en primaryFields
-    if (Array.isArray(layout.primaryFields)) {
-      layout.primaryFields = [...layout.primaryFields];
-      const aseguradoIndex = layout.primaryFields.findIndex(
-        (f) => f.key === "asegurado"
-      );
-      const aseguradoField = {
-        key: "asegurado",
-        label: "Asegurado",
-        value: name
-      };
-      if (aseguradoIndex >= 0) {
-        layout.primaryFields[aseguradoIndex] = aseguradoField;
-      } else {
-        layout.primaryFields.push(aseguradoField);
-      }
-    }
-
-    if (Array.isArray(layout.secondaryFields)) {
-      layout.secondaryFields = [...layout.secondaryFields];
-      const emailFieldIndex = layout.secondaryFields.findIndex(
-        (f) => f.key === "email"
-      );
-      const emailField = {
-        key: "email",
-        label: "Email",
-        value: email || "no-email"
-      };
-      if (emailFieldIndex >= 0) {
-        layout.secondaryFields[emailFieldIndex] = emailField;
-      } else {
-        layout.secondaryFields.push(emailField);
-      }
-    }
-
-    if (Array.isArray(pass.barcodes) && pass.barcodes[0]) {
-      pass.barcodes[0] = {
-        ...pass.barcodes[0],
-        message: buildQrDemoMessage(name, email)
-      };
-    }
-
-    applyContactBackField(pass, contactUrl);
+    applyContactBackFields(pass, { contactUrlInput: contactUrl });
 
     res.setHeader("Content-Type", "application/vnd.apple.pkpass");
     res.setHeader(

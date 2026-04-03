@@ -26,11 +26,6 @@
         "key": "fecha",
         "label": "Documento",
         "value": "V-00000000"
-      },
-      {
-        "key": "email",
-        "label": "Email",
-        "value": "persona@correo.com"
       }
     ],
     "auxiliaryFields": [
@@ -41,13 +36,6 @@
       }
     ]
   },
-  "barcodes": [
-    {
-      "format": "PKBarcodeFormatQR",
-      "message": "https://example.com/carnet/00000001",
-      "messageEncoding": "iso-8859-1"
-    }
-  ],
   "backgroundColor": "rgb(0, 75, 143)",
   "foregroundColor": "rgb(255, 255, 255)",
   "labelColor": "rgb(245, 159, 36)"

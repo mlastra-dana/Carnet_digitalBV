@@ -1116,10 +1116,15 @@ function Home({ amplifyOutputs }) {
 
   const buildPkpassBlob = async () => {
     const fullName = `${firstNames} ${lastNames}`.replace(/\s+/g, " ").trim();
+    const safeDocumentId = (identificationNumber || "").trim();
+    const policyNumber = `POL-${safeDocumentId.replace(/[^0-9]/g, "").slice(-6) || "000001"}`;
     const contactUrl = (import.meta.env.VITE_PKPASS_CONTACT_URL || "").toString().trim();
     const payload = {
       name: fullName || "Cliente",
-      email: (email || "").trim(),
+      documentId: safeDocumentId || "V-00000000",
+      policyNumber,
+      planName: "Integral",
+      validUntil: "31/12/2026",
       photoDataUrl: photoDataUrl || null,
       ...(contactUrl ? { contactUrl } : {})
     };
