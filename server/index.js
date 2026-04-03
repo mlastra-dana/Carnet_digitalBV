@@ -60,8 +60,8 @@ function applyContactBackFields(pass, { contactUrlInput }) {
   // Siempre agregamos una nota para garantizar que el pase tenga reverso/detalles.
   upsertBackField({
     key: "nota_carnet",
-    label: "Información",
-    value: "Carnet digital de asegurado LBC Seguros."
+    label: "Asistencia de Seguros",
+    value: "Usa el enlace para reportar siniestros y recibir atencion."
   });
 
   const contactUrl = sanitizeContactUrl(contactUrlInput || process.env.PKPASS_CONTACT_URL);
@@ -70,9 +70,9 @@ function applyContactBackFields(pass, { contactUrlInput }) {
   const safeHref = escapeHtml(contactUrl);
   upsertBackField({
     key: "contacto",
-    label: "Contacto",
+    label: "Reportar siniestro",
     value: contactUrl,
-    attributedValue: `<a href="${safeHref}">Abrir contacto</a>`
+    attributedValue: `<a href="${safeHref}">Reportar siniestro</a>`
   });
 }
 
