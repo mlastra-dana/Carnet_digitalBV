@@ -1162,6 +1162,7 @@ function Home({ amplifyOutputs }) {
   const startDanaConversation = async () => {
     const fullName = `${firstNames} ${lastNames}`.replace(/\s+/g, " ").trim();
     const safeDocumentId = (identificationNumber || "").trim();
+    const safeDocumentFileId = safeDocumentId.replace(/\D+/g, "").slice(0, 48);
     let pkpassBase64 = "";
 
     try {
@@ -1185,7 +1186,7 @@ function Home({ amplifyOutputs }) {
       DOCUMENT_ID: safeDocumentId,
       EMAIL: (email || "").trim(),
       PKPASS_BASE64: pkpassBase64,
-      PKPASS_FILE_NAME: `carnet-${safeDocumentId || "asegurado"}.pkpass`
+      PKPASS_FILE_NAME: `${safeDocumentFileId || "asegurado"}.pkpass`
     };
 
     const targetUrl = `${apiBaseUrl.replace(/\/+$/, "")}/start-conversation`;

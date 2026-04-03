@@ -50,6 +50,16 @@ const toBase64BodyBuffer = (value: string): Buffer => {
   return Buffer.from(normalized.replace(/\s+/g, ""), "base64");
 };
 
+const isLikelyPkpassZip = (buffer: Buffer): boolean => {
+  if (!buffer || buffer.length < 4) return false;
+  return (
+    buffer[0] === 0x50 &&
+    buffer[1] === 0x4b &&
+    (buffer[2] === 0x03 || buffer[2] === 0x05 || buffer[2] === 0x07) &&
+    (buffer[3] === 0x04 || buffer[3] === 0x06 || buffer[3] === 0x08)
+  );
+};
+
 const buildS3ObjectKey = (keyPrefix: string, requestId: string, documentId?: string): string => {
   const normalizedPrefix = keyPrefix.replace(/^\/+|\/+$/g, "");
   const normalizedDocumentId = (documentId || "")
@@ -60,6 +70,13 @@ const buildS3ObjectKey = (keyPrefix: string, requestId: string, documentId?: str
   const filename = `${fileId}-${timestamp}.pkpass`;
 
   return normalizedPrefix ? `${normalizedPrefix}/${filename}` : filename;
+};
+
+const buildPkpassFileName = (documentId?: string): string => {
+  const normalizedDocumentId = (documentId || "")
+    .replace(/\D+/g, "")
+    .slice(0, 48);
+  return `${normalizedDocumentId || "asegurado"}.pkpass`;
 };
 
 const buildPublicReference = (
@@ -124,15 +141,13 @@ export const handler = async (
       pickString(requestData.PKPASS) ||
       pickString(requestData.Pkpass) ||
       pickString(requestData.pkpass);
+    const documentId =
+      pickString(requestData.DOCUMENT_ID) || pickString(requestData.Document_ID);
     const pkpassBase64 =
       pickString(requestData.PKPASS_BASE64) ||
       pickString(requestData.PkpassBase64) ||
       pickString(requestData.pkpassBase64);
-    const pkpassFileName =
-      pickString(requestData.PKPASS_FILE_NAME) ||
-      pickString(requestData.PkpassFileName) ||
-      pickString(requestData.pkpassFileName) ||
-      "carnet-asegurado.pkpass";
+    const pkpassFileName = buildPkpassFileName(documentId);
 
     let uploadedPkpassReference: string | undefined;
 
@@ -142,7 +157,7 @@ export const handler = async (
         const key = buildS3ObjectKey(
           s3KeyPrefix,
           requestId,
-          pickString(requestData.DOCUMENT_ID) || pickString(requestData.Document_ID)
+          documentId
         );
         const pkpassBodyBuffer = toBase64BodyBuffer(pkpassBase64);
 
@@ -150,6 +165,13 @@ export const handler = async (
           return json(400, {
             error: "InvalidPkpassBase64",
             message: "PKPASS_BASE64 esta vacio o no es valido."
+          });
+        }
+
+        if (!isLikelyPkpassZip(pkpassBodyBuffer)) {
+          return json(400, {
+            error: "InvalidPkpassBinary",
+            message: "El archivo PKPASS decodificado no tiene formato ZIP valido."
           });
         }
 
@@ -182,8 +204,7 @@ export const handler = async (
         pickString(requestData.NOMBRECLIENTE) ||
         pickString(requestData.NombreCliente),
       DOCUMENT_ID:
-        pickString(requestData.DOCUMENT_ID) ||
-        pickString(requestData.Document_ID),
+        documentId,
       PKPASS: uploadedPkpassReference || requestPkpass,
       EMAIL:
         pickString(requestData.EMAIL) ||
