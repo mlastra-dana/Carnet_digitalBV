@@ -1,6 +1,7 @@
 import React, { useEffect, useMemo, useRef, useState } from "react";
 
 function Home({ amplifyOutputs }) {
+  const OCR_CANCELLED_ERROR = "__OCR_CANCELLED__";
   const [isIntro, setIsIntro] = useState(true);
   const [registrationStep, setRegistrationStep] = useState(1);
   const [firstNames, setFirstNames] = useState("");
@@ -39,6 +40,8 @@ function Home({ amplifyOutputs }) {
   const photoFileInputRef = useRef(null);
   const idFileInputRef = useRef(null);
   const livenessFramesRef = useRef([]);
+  const ocrRunIdRef = useRef(0);
+  const ocrAbortControllerRef = useRef(null);
 
   useEffect(() => {
     if (typeof window !== "undefined") {
@@ -101,6 +104,24 @@ function Home({ amplifyOutputs }) {
   const stopAllCameras = () => {
     stopPortraitCamera();
     stopLivenessCamera();
+  };
+
+  const cancelActiveOcr = () => {
+    ocrRunIdRef.current += 1;
+    if (ocrAbortControllerRef.current) {
+      ocrAbortControllerRef.current.abort();
+      ocrAbortControllerRef.current = null;
+    }
+  };
+
+  const startOcrRun = () => {
+    cancelActiveOcr();
+    const controller = new AbortController();
+    ocrAbortControllerRef.current = controller;
+    return {
+      runId: ocrRunIdRef.current,
+      signal: controller.signal
+    };
   };
 
   const startPortraitCamera = async () => {
@@ -196,6 +217,7 @@ function Home({ amplifyOutputs }) {
 
   useEffect(
     () => () => {
+      cancelActiveOcr();
       stopAllCameras();
     },
     // eslint-disable-next-line react-hooks/exhaustive-deps
@@ -331,6 +353,13 @@ function Home({ amplifyOutputs }) {
       .trim();
   };
 
+  const formatVenezuelaDocumentId = (prefix, digits) => {
+    const normalizedPrefix = (prefix || "").replace(/[^VEJGP]/gi, "").toUpperCase();
+    const normalizedDigits = (digits || "").replace(/\D/g, "");
+    if (!normalizedDigits) return "";
+    return normalizedPrefix ? `${normalizedPrefix}-${normalizedDigits}` : normalizedDigits;
+  };
+
   const extractBoliviaDocumentId = (lines) => {
     const joinedText = lines.join(" ");
     const labelFocusedText = lines
@@ -339,6 +368,19 @@ function Home({ amplifyOutputs }) {
       )
       .join(" ");
     const searchText = `${labelFocusedText} ${joinedText}`.trim();
+
+    // Prioridad: formato venezolano (ej: V 24.657.722, V-24657722, E 12345678).
+    const venezuelaRegex = /\b([VEJGP])\s*[-.:]?\s*([0-9][0-9.\s]{5,14})\b/gi;
+    let venezuelaMatch = venezuelaRegex.exec(searchText);
+    while (venezuelaMatch) {
+      const prefix = (venezuelaMatch[1] || "").toUpperCase();
+      const digits = (venezuelaMatch[2] || "").replace(/\D/g, "");
+      if (digits.length >= 6 && digits.length <= 10) {
+        return formatVenezuelaDocumentId(prefix, digits);
+      }
+      venezuelaMatch = venezuelaRegex.exec(searchText);
+    }
+
     const docRegex =
       /\b([0-9]{5,10})(?:\s*[-.]\s*([0-9A-Z]{1,3}))?(?:\s+(LP|CB|SC|OR|PT|CH|TJ|BE|PD))?\b/gi;
 
@@ -356,12 +398,26 @@ function Home({ amplifyOutputs }) {
       currentMatch = docRegex.exec(searchText);
     }
 
-    if (!bestMatch) return "";
-    return formatBoliviaDocumentId(
-      bestMatch.digits,
-      bestMatch.complement,
-      bestMatch.expedition
-    );
+    if (bestMatch) {
+      return formatBoliviaDocumentId(
+        bestMatch.digits,
+        bestMatch.complement,
+        bestMatch.expedition
+      );
+    }
+
+    // Fallback: grupos numéricos con separadores (ej: 24.657.722) sin prefijo.
+    const groupedDigitsRegex = /\b([0-9][0-9.\s]{5,14})\b/g;
+    let groupedMatch = groupedDigitsRegex.exec(searchText);
+    while (groupedMatch) {
+      const digits = (groupedMatch[1] || "").replace(/\D/g, "");
+      if (digits.length >= 6 && digits.length <= 10) {
+        return digits;
+      }
+      groupedMatch = groupedDigitsRegex.exec(searchText);
+    }
+
+    return "";
   };
 
   const parseBoliviaIdCardData = (ocrText) => {
@@ -591,11 +647,14 @@ function Home({ amplifyOutputs }) {
     return [...new Set(candidates)];
   };
 
-  const postOcrWithFallback = async (payload) => {
+  const postOcrWithFallback = async (payload, signal) => {
     const candidates = getOcrApiCandidates();
     let lastError = null;
 
     for (let i = 0; i < candidates.length; i += 1) {
+      if (signal?.aborted) {
+        throw new Error(OCR_CANCELLED_ERROR);
+      }
       const baseUrl = candidates[i];
       try {
         return await fetch(`${baseUrl}/ocr-id`, {
@@ -603,9 +662,13 @@ function Home({ amplifyOutputs }) {
           headers: {
             "Content-Type": "application/json"
           },
-          body: JSON.stringify(payload)
+          body: JSON.stringify(payload),
+          signal
         });
       } catch (error) {
+        if (signal?.aborted) {
+          throw new Error(OCR_CANCELLED_ERROR);
+        }
         lastError = error;
       }
     }
@@ -976,6 +1039,7 @@ function Home({ amplifyOutputs }) {
   const handleIdFileChange = async (event) => {
     const file = event.target.files?.[0];
     if (!file) return;
+    const { runId, signal } = startOcrRun();
 
     setIdReadError("");
     setIdReadSuccess("");
@@ -986,20 +1050,29 @@ function Home({ amplifyOutputs }) {
 
     try {
       const { ocrCandidates, sourceLabel, previewDataUrl } = await getOcrInputFromFile(file);
+      if (signal.aborted || ocrRunIdRef.current !== runId) {
+        throw new Error(OCR_CANCELLED_ERROR);
+      }
       setIdDocumentImageDataUrl(previewDataUrl || "");
       setOcrStatus("Enviando documento al servidor...");
 
       const attempts = [];
       const attemptErrors = [];
       for (let i = 0; i < ocrCandidates.length; i += 1) {
+        if (signal.aborted || ocrRunIdRef.current !== runId) {
+          throw new Error(OCR_CANCELLED_ERROR);
+        }
         const candidate = ocrCandidates[i];
         setOcrStatus(`Validando ${candidate.label}...`);
         try {
           const candidateDataUrl = await blobToDataUrl(candidate.input);
+          if (signal.aborted || ocrRunIdRef.current !== runId) {
+            throw new Error(OCR_CANCELLED_ERROR);
+          }
           const response = await postOcrWithFallback({
             imageBase64: candidateDataUrl,
             sourceLabel: `${sourceLabel} - ${candidate.label}`
-          });
+          }, signal);
 
           if (!response.ok) {
             const errorPayload = await response.json().catch(() => ({}));
@@ -1030,6 +1103,13 @@ function Home({ amplifyOutputs }) {
             score
           });
         } catch (attemptError) {
+          if (
+            attemptError?.message === OCR_CANCELLED_ERROR ||
+            signal.aborted ||
+            ocrRunIdRef.current !== runId
+          ) {
+            throw new Error(OCR_CANCELLED_ERROR);
+          }
           const userMessage = normalizeNetworkMessage(
             attemptError?.message,
             "No se pudo validar el documento."
@@ -1067,11 +1147,18 @@ function Home({ amplifyOutputs }) {
         setIdReadSuccess("Lectura parcial: revisa y completa los campos faltantes.");
       }
     } catch (error) {
+      if (error?.message === OCR_CANCELLED_ERROR) {
+        return;
+      }
       console.error("Error leyendo documento con OCR", error);
       setIdReadError(error?.message || "No se pudo procesar la imagen del carnet de identidad.");
     } finally {
+      if (ocrRunIdRef.current !== runId) {
+        return;
+      }
       setOcrStatus("");
       setIsReadingId(false);
+      ocrAbortControllerRef.current = null;
       if (idFileInputRef.current) {
         idFileInputRef.current.value = "";
       }
@@ -1079,6 +1166,7 @@ function Home({ amplifyOutputs }) {
   };
 
   const clearAttachedIdFile = () => {
+    cancelActiveOcr();
     setIdFileName("");
     setIdDocumentImageDataUrl("");
     setIdReadError("");
@@ -1087,6 +1175,7 @@ function Home({ amplifyOutputs }) {
     setFirstNames("");
     setLastNames("");
     setOcrStatus("");
+    setIsReadingId(false);
     setIsLivenessRunning(false);
     if (idFileInputRef.current) {
       idFileInputRef.current.value = "";
