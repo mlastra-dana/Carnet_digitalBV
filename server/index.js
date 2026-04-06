@@ -242,7 +242,8 @@ function extractBoliviaDocumentId(lines) {
   const searchText = `${labelFocusedText} ${joinedText}`.trim();
 
   // Prioridad: formato venezolano (ej: V 24.657.722, V-24657722, E 12345678).
-  const venezuelaRegex = /\b([VEJGP])\s*[-.:]?\s*([0-9][0-9.\s]{5,14})\b/gi;
+  const venezuelaRegex =
+    /\b([VEJGP])\s*[-.:]?\s*([0-9]{1,2}(?:[.\s][0-9]{3}){1,2}|[0-9]{6,10})\b/gi;
   let venezuelaMatch = venezuelaRegex.exec(searchText);
   while (venezuelaMatch) {
     const prefix = (venezuelaMatch[1] || "").toUpperCase();
